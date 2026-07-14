@@ -3,6 +3,27 @@
 This is the reference architecture for ctrluhr. Read it once end-to-end before
 writing any code. Other docs reference sections from here.
 
+## 0. Doc convention
+
+The build docs (01–07) follow a **docs-as-source-of-truth** convention for
+any step that involves a third-party library or framework. Each such step:
+
+- Links to the official docs that matter, in reading order, and calls out
+  the specific sections relevant to our use case.
+- Shows a "Reference — what the end file should look like" code block at
+  the end, marked **REFERENCE ONLY**. Use it to sanity-check what you've
+  written — not as a copy-paste source. Library versions change; docs
+  are always more current than this repo.
+- For our own business logic (enrollment flow, categorization, daemon
+  config) the docs go heavier on code + "why" — there's no external doc
+  to defer to.
+
+See `docs/README.md` §"How these docs are written" for the full rationale.
+**When you start a new phase or pick up a new library, default to this
+convention** — even if the existing doc for that step predates it. Update
+the doc to match the convention as you work, or leave a note for yourself
+to do so.
+
 ## 1. The big picture
 
 ctrluhr is a personal time-tracking system designed for habit construction

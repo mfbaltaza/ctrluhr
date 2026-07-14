@@ -4,10 +4,48 @@ Reference for each phase after MVP plumbing is done. Read the relevant
 section fully before starting that phase. Each phase assumes the previous
 one is complete and the phase-0 smoke test still passes on `main`.
 
+## How to use this doc (and the doc convention)
+
+This file is a **planning doc**, not a step-by-step build doc. The build
+docs for each phase get written when you start that phase. When you do
+start one, follow the **docs-as-source-of-truth** convention from
+`00-plan-overview.md` §0 and `docs/README.md`:
+
+- For each new library or tool introduced, link to the official docs and
+  call out the specific sections that matter. Don't paste long code
+  blocks — write the file yourself from the docs.
+- For our own business logic (categorization ranking, habit streaks,
+  recap prompts) the build doc goes heavy on code + "why".
+- Each phase's "smoke test" section here is a checklist; the build
+  doc's smoke test is the actual manual test you run.
+
+The rest of this file is the per-phase plan: what's changing, what
+libraries are involved, what the smoke test is. Treat the library
+references below as a starting point — verify they're still current
+when you start the phase, since things move fast (Vercel AI SDK ships
+breaking changes, better-auth's plugin API evolves, etc.).
+
 ## Phase 1 — Real tracking
 
 **Goal:** replace the stub tracker with actual window polling on Linux
 (Hyprland/X11) and Windows. Dashboard shows your real day.
+
+**Docs to read when you start this phase:**
+
+- **Hyprland IPC** — https://wiki.hyprland.org/IPC/
+  Specifically `hyprctl activewindow -j` and the
+  `HYPRLAND_INSTANCE_SIGNATURE` env var for detection.
+- **xgb / xgbutil** (X11 fallback) — https://github.com/jezek/xgb
+  `_NET_ACTIVE_WINDOW` property changes; `ICCCM WM_NAME` /
+  `_NET_WM_NAME` for titles.
+- **Windows `user32`** — https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getforegroundwindow
+  `GetForegroundWindow` + `GetWindowTextW` + `QueryFullProcessImageNameW`.
+- **xprintidle** (X11 idle detection) — http://gaugusch.at/xprintidle.shtml
+  And the Hyprland idle equivalent (poll for no focused-window changes).
+- **ECharts heatmap** — https://echarts.apache.org/en/option.html#series-heatmap
+  For the week heatmap component.
+- **PostgreSQL `EXTRACT(HOUR FROM ...)`** — https://www.postgresql.org/docs/current/functions-datetime.html
+  For the hourly breakdown in `/analytics/day`.
 
 ### Daemon work
 
@@ -93,6 +131,19 @@ one is complete and the phase-0 smoke test still passes on `main`.
 **Goal:** stop labeling everything "Uncategorized". Hybrid rules + embeddings
 auto-categorize 90%+ of events; user relabels the rest via UI.
 
+**Docs to read when you start this phase:**
+
+- **pgvector distance operators** — https://github.com/pgvector/pgvector#vector-operators
+  Specifically `<=>` (cosine distance) and the `<->` (L2) operator we
+  use in the SQL fallback.
+- **OpenAI Embeddings API** — https://platform.openai.com/docs/api-reference/embeddings
+  Already used in phase 0's `lib/embeddings.ts`; phase 2 actually calls it.
+- **Drizzle raw SQL** — https://orm.drizzle.team/docs/sql
+  For the `embedding <=> ${vector}` query inside the categorizer.
+- **HNSW index in pgvector** — https://github.com/pgvector/pgvector#hnsw
+  For the deferred HNSW index on `activity_events.raw_embedding`. Note:
+  must use `CREATE INDEX CONCURRENTLY` on a populated table.
+
 ### API work
 
 1. **`lib/embeddings.ts` integration with categorizer** — when no rule
@@ -159,6 +210,16 @@ auto-categorize 90%+ of events; user relabels the rest via UI.
 
 **Goal:** define habit loops, see streaks, get nudged.
 
+**Docs to read when you start this phase:**
+
+- **Bun cron / node-cron** (whichever you prefer) for the daily job that
+  reads yesterday's events and writes `habit_checkins`. Bun has a built-in
+  `Bun.scheduler` if you're not using an external cron in phase 3 yet.
+- **ECharts calendar / heatmap** — https://echarts.apache.org/en/option.html#series-calendar
+  For the streak heatmap on the habits page.
+- **TanStack Query optimistic updates** — https://tanstack.com/query/latest/docs/framework/react/guides/optimistic-updates
+  The manual checkin button feels much better with optimistic updates.
+
 ### Schema additions (already in DB from phase 0)
 - `habits` and `habit_checkins` tables are ready.
 
@@ -197,6 +258,21 @@ auto-categorize 90%+ of events; user relabels the rest via UI.
 
 **Goal:** ask "why am I distracted at 3pm?" and get a grounded answer.
 Surface weekly recaps. Find similar sessions.
+
+**Docs to read when you start this phase:**
+
+- **Vercel AI SDK — `streamText`** — https://ai-sdk.dev/docs/reference/ai-sdk-core/stream-text
+  The main API for the `/suggest` streaming endpoint. The SDK ships
+  breaking changes between majors; pin a version and read its docs.
+- **Vercel AI SDK — tool calling** — https://ai-sdk.dev/docs/ai-sdk-core/tools-and-tool-calling
+  For the `query_events`, `query_similar_sessions`, `get_habits` tools
+  we give the model.
+- **`@ai-sdk/react` — `useChat` hook** — https://ai-sdk.dev/docs/reference/ai-sdk-react/use-chat
+  For the chat UI on `/_auth/ask`.
+- **Hono SSE** — https://hono.dev/docs/helpers/streaming#streamtext
+  The streaming transport for the API.
+- **`react-markdown`** — https://github.com/remarkjs/react-markdown
+  For rendering the weekly recap markdown.
 
 ### New deps
 
@@ -252,6 +328,23 @@ recaps (id, user_id, week_start date, markdown text, created_at)
 ## Phase 5 — SaaS hardening
 
 **Goal:** real users beyond you. Billing, rate limits, deployment, monitoring.
+
+**Docs to read when you start this phase:**
+
+- **better-auth OAuth providers** — https://www.better-auth.com/docs/authentication/social
+  GitHub + Google via the social provider plugin.
+- **better-auth Stripe plugin** — https://www.better-auth.com/docs/plugins/stripe
+  Subscription billing tied to the auth identity.
+- **PostgreSQL Row-Level Security** — https://www.postgresql.org/docs/current/ddl-rowsecurity.html
+  Per-request `SET LOCAL app.user_id = ...` pattern.
+- **Fly.io Bun image** — https://fly.io/docs/languages-and-frameworks/bun/
+  The API deploy target.
+- **Vercel TanStack Start preset** — https://vercel.com/docs/frameworks/tanstack-start
+  The web deploy target.
+- **`go-selfupdate`** — https://github.com/minio/selfupdate
+  Daemon auto-update from GitHub releases.
+- **Sentry Bun SDK** — https://docs.sentry.io/platforms/javascript/guides/bun/
+  And the Sentry Go SDK for the daemon.
 
 ### Deploy
 

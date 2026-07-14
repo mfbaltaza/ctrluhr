@@ -5,6 +5,31 @@ You are building this manually, learning each tool as you go. These docs are
 your reference: read top-to-bottom the first time, then come back to each file
 as you reach that phase.
 
+## How these docs are written
+
+These docs use a **docs-as-source-of-truth** convention for every step
+that involves a third-party library, framework, or tool. The pattern:
+
+- The official docs (better-auth, Hono, Drizzle, TanStack, etc.) are
+  the source of truth for *what* the API looks like and *how* to call
+  it. Library versions change; docs are always more current than this
+  repo.
+- Each step in a build doc links to **which** docs to read, **in what
+  order**, and calls out the specific sections that matter for our use
+  case. Reading is the work; the doc tells you where to focus.
+- A "Reference — what the end file should look like" code block at the
+  end of each step shows the *target shape* of the file. Use it to
+  sanity-check what you've written — not as a source of truth to copy
+  from. If the reference and the current docs disagree, the docs win.
+- For our own business logic (enrollment flow, categorization rules,
+  daemon config, etc.) the docs go heavier on code + explanations of
+  the *why*, because there's no external doc to defer to.
+
+**Rule of thumb:** if you're about to paste a code block from this repo
+into your editor, ask yourself "do I know why each line is here?" If
+not, re-read the linked docs and write it yourself. The friction is
+the learning.
+
 ## Philosophy
 
 - **Habit construction, not billing** — the data serves you, not an invoice.
