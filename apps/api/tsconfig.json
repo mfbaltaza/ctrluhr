@@ -1,6 +1,7 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
+    "outDir": "./dist",
     "strict": true,
     "types": ["bun"],
     "jsx": "react-jsx",
