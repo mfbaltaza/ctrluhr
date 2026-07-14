@@ -364,7 +364,7 @@ ctrluhr/
 ## 9. Environments
 
 - **Local dev** — everything on your machine. Neon dev branch. Bun serve on
-  :3001, TanStack Start on :3000, daemon on demand (go run).
+  :3000, TanStack Start on :5173, daemon on demand (go run).
 - **Preview** (phase 5+) — Neon PR branch, Fly.io preview app, Vercel preview
   URL per PR.
 - **Production** (phase 5+) — Neon main branch, Fly.io API, Vercel web,

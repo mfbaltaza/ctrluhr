@@ -11,7 +11,7 @@ Stub tracker means: no real window polling, just a script reading a JSON
 file of scheduled events. Phase 1 swaps in real Hyprland/X11/Windows
 trackers behind the same `Tracker` interface.
 
-> Assumes `03-api-setup.md` done. API reachable at `http://localhost:3001`.
+> Assumes `03-api-setup.md` done. API reachable at `http://localhost:3000`.
 
 ## 0. Daemon structure
 
@@ -107,7 +107,7 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 	if c.Endpoint == "" {
-		c.Endpoint = "http://localhost:3001"
+		c.Endpoint = "http://localhost:3000"
 	}
 	if c.PollIntervalMS == 0 {
 		c.PollIntervalMS = 1000
@@ -493,7 +493,7 @@ func main() {
 			osName := "linux"
 			if len(os.Args) >= 5 { osName = os.Args[4] }
 			endpoint := os.Getenv("CTRLUHR_ENDPOINT")
-			if endpoint == "" { endpoint = "http://localhost:3001" }
+			if endpoint == "" { endpoint = "http://localhost:3000" }
 			if err := auth.Enroll(endpoint, token, name, osName); err != nil {
 				fmt.Println("enroll failed:", err)
 				os.Exit(1)

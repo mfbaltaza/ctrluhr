@@ -1,7 +1,7 @@
 # 03 — API Setup
 
 Goal: a running Hono server on Bun that:
-- boots on `:3001`
+- boots on `:3000`
 - mounts better-auth `/auth/*` with **magic link** (Resend email)
 - exposes `POST /events` (device JWT auth) — validates + persists batches
 - exposes `POST /devices` (user session auth) — create a device, return one-time enrollment token
@@ -160,8 +160,8 @@ Notes:
   purely cosmetic.
 - `sendMagicLink`'s `url` is the URL the user clicks — better-auth appends
   the token as a query param. We send it via Resend.
-- `baseURL` is where better-auth is hosted (your API), not the web app. In
-  dev: `http://localhost:2001`.
+  - `baseURL` is where better-auth is hosted (your API), not the web app. In
+  dev: `http://localhost:3000`.
 - `emailAndPassword: { enabled: false }` because you chose magic link only.
 
 ### Sync better-auth schema requirements
@@ -199,7 +199,7 @@ app.use('*', logger());
 app.use(
   '*',
   cors({
-    origin: process.env.WEB_ORIGIN ?? 'http://localhost:3000',
+    origin: process.env.WEB_ORIGIN ?? 'http://localhost:5173',
     credentials: true,
   }),
 );
@@ -211,7 +211,7 @@ app.route('/events', eventsRoute);
 app.route('/devices', devicesRoute);
 app.route('/analytics', analyticsRoute);
 
-const port = Number(process.env.PORT ?? 3001);
+const port = Number(process.env.PORT ?? 3000);
 export default { port, fetch: app.fetch };
 ```
 
@@ -647,7 +647,7 @@ bun run src/index.ts
 In another terminal:
 
 ```sh
-curl http://localhost:3001/healthz
+curl http://localhost:3000/healthz
 # {"ok":true}
 ```
 
@@ -656,7 +656,7 @@ If that works, the server boots. Next, check the auth flow:
 ### Manual magic-link smoke
 
 ```sh
-curl -X POST http://localhost:3001/auth/...
+curl -X POST http://localhost:3000/auth/...
 ```
 
 Better-auth's magic-link endpoint is a POST to `/auth/magic-link/send`. Body:
@@ -689,8 +689,8 @@ The path may differ in your installed version. Try
 
 ### `getSession` returns null even after click
 Cookie domain mismatch. `BETTER_AUTH_BASE_URL` must match the URL your
-browser sees. If you're testing in a browser at `http://localhost:3000`
-calling `http://localhost:3001`, the fetch calls to the API need
+browser sees. If you're testing in a browser at `http://localhost:5173`
+calling `http://localhost:3000`, the fetch calls to the API need
 `credentials: 'include'` AND `cors({ credentials: true })` on Hono (we set
 both). In better-auth's session cookie options, ensure the cookie is scoped
 to be readable cross-origin — see better-auth docs on "Clinton" (their
@@ -712,7 +712,7 @@ Run `pnpm add jose` in `apps/api`.
 
 ## Done criteria
 
-- [ ] `bun run src/index.ts` boots Hono on `:3001`
+- [ ] `bun run src/index.ts` boots Hono on `:3000`
 - [ ] `curl /healthz` returns `{ ok: true }`
 - [ ] `POST /auth/magic-link/send` sends an email (visible in Resend logs)
 - [ ] Session cookie set with a real login (you can verify by hitting an

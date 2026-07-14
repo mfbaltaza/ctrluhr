@@ -13,7 +13,7 @@ Run these in three terminals:
 cd apps/api
 bun run src/index.ts
 ```
-Waits on `:3001`. Confirms `Started Hono app on http://localhost:3001` (or
+Waits on `:3000`. Confirms `Started Hono app on http://localhost:3000` (or
 whatever Bun prints).
 
 **Terminal B — Web**
@@ -21,7 +21,7 @@ whatever Bun prints).
 cd apps/web
 pnpm dev
 ```
-Boots Vite/Vinxi on `:3000`.
+Boots Vite/Vinxi on `:5173`.
 
 **Terminal C — Daemon** (we'll start it after enrollment)
 
@@ -29,19 +29,19 @@ Boots Vite/Vinxi on `:3000`.
 
 ### 1. Health check
 ```sh
-curl http://localhost:3001/healthz
+curl http://localhost:3000/healthz
 ```
 Expected: `{"ok":true}`
 
 ### 2. Magic link login
-- Open `http://localhost:3000/login` in your browser.
+- Open `http://localhost:5173/login` in your browser.
 - Enter the email you signed up to Resend with (the only one sandbox will
   deliver to).
 - Submit. You should see "Check your inbox".
 - Open your inbox. Click the link.
 - You should land on `/dashboard` (URL bar shows it). The page renders even
   though it's empty — that's fine.
-- In browser DevTools → Application → Cookies → `http://localhost:3001`:
+- In browser DevTools → Application → Cookies → `http://localhost:3000`:
   you should see a `better-auth.session_token` (or similarly named) cookie.
 
 If the cookie doesn't appear, you have a CORS / credentials issue — see

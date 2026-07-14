@@ -1,6 +1,6 @@
 # 04 — Web Setup (TanStack Start + React 19)
 
-Goal: a React app on `:3000` that:
+Goal: a React app on `:5173` that:
 - Boots via TanStack Start (file-based router)
 - Serves `/login` with magic-link form
 - Auth gate redirects to `/login` when no session
@@ -10,7 +10,7 @@ Goal: a React app on `:3000` that:
 By end of this file you can log in with your email, see a basic dashboard,
 create a device, and copy the token for the daemon.
 
-> Assumes `03-api-setup.md` is done and the API boots on `:3001`.
+> Assumes `03-api-setup.md` is done and the API boots on `:3000`.
 
 ## 0. Background — TanStack Start mental model
 
@@ -75,9 +75,9 @@ standardized them, but double-check):
 
 ```json
 "scripts": {
-  "dev": "vite dev --port 3000",
+  "dev": "vite dev --port 5173",
   "build": "vite build && tsc --noEmit",
-  "preview": "vite preview --port 3000",
+  "preview": "vite preview --port 5173",
   "start": "node .output/server/index.mjs",
   "typecheck": "tsc --noEmit",
   "lint": "biome check src"
@@ -136,7 +136,7 @@ raw fetch.
 import { createAuthClient } from 'better-auth/react';
 
 export const auth = createAuthClient({
-  baseURL: 'http://localhost:3001',
+  baseURL: 'http://localhost:3000',
 });
 export const { signIn, signOut, useSession } = auth;
 ```
@@ -147,7 +147,7 @@ export const { signIn, signOut, useSession } = auth;
 import { auth } from './auth';
 
 async function req(path: string, init: RequestInit = {}) {
-  const res = await fetch(`http://localhost:3001${path}`, {
+  const res = await fetch(`http://localhost:3000${path}`, {
     ...init,
     credentials: 'include',
     headers: { 'Content-Type': 'application/json', ...(init.headers ?? {}) },
@@ -544,7 +544,7 @@ From `apps/web/`:
 pnpm dev
 ```
 
-In your browser: `http://localhost:3000/login`. Enter your Resend-account
+In your browser: `http://localhost:5173/login`. Enter your Resend-account
 email → check inbox → click link → land on `/dashboard` (empty). Navigate to
 `/devices` → create a device → see token. Token won't be usable until the
 daemon exists (next file).
@@ -563,10 +563,10 @@ Sometimes the devtools need `pnpm add @tanstack/react-router-devtools`. If
 import fails, install them. For prod builds drop the devtools.
 
 ### `auth.getSession()` doesn't return session even after login
-better-auth's session cookie is set for the API domain (`:3001`), not the
-web domain (`:3000`). You need to either:
+better-auth's session cookie is set for the API domain (`:3000`), not the
+web domain (`:5173`). You need to either:
 1. Use a reverse proxy in dev (e.g. `vite` server proxying `/auth/*` to
-   `:3001`), OR
+   `:3000`), OR
 2. Use better-auth's `crossSubdomainCookies` and a shared base domain
    (only works with real domains), OR
 3. Do auth via the `better-auth/react` client which handles cross-origin CORS
@@ -604,7 +604,7 @@ make sure `apps/web/tsconfig.json` has the `paths` block from Step 1 and
 
 ## Done criteria
 
-- [ ] TanStack Start dev server boots on `:3000`
+- [ ] TanStack Start dev server boots on `:5173`
 - [ ] `/login` form sends magic link email (visible in Resend logs)
 - [ ] Clicking link sets session cookie; browser lands on `/dashboard`
 - [ ] `/dashboard` shows ECharts stacked bar, auto-refreshing every 15s
