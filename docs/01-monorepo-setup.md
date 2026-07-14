@@ -28,13 +28,13 @@ for our purposes, you're set; otherwise install.
 
 ```
 node --version        # need >= 20 (Bun requires it indirectly; TanStack Start prefers 20+)
-pnpm --version        # need >= 9; install: npm i -g pnpm
+pnpm --version        # need >= 11; install: npm i -g pnpm
 bun --version         # need >= 1.1; install: curl -fsSL https://bun.sh/install | bash
 go version           # need >= 1.22
 git --version        # any modern version
 ```
 
-If `pnpm` is missing: `npm i -g pnpm@9`.
+If `pnpm` is missing: `npm i -g pnpm@11`.
 If `bun` is missing: `curl -fsSL https://bun.sh/install | bash`.
 If `go` is missing: use your distro's package or https://go.dev/dl/.
 
@@ -70,8 +70,8 @@ build/
 # go
 *.exe
 *.exe~
-daemon/ctrluhr
-daemon/ctrluhr-*
+apps/daemon/ctrluhr*
+apps/daemon/daemon*
 vendor/
 
 # os/editor
@@ -88,16 +88,17 @@ npm-debug.log*
 # nx cache
 .nx/cache/
 .nx/workspace-data/
+.nx/migrate-runs
 ```
 
-Create `package.json` at root (workspace root — not the publishable package):
+Create `package.json` at root (workspace root — not the publishable package): 
 
 ```json
 {
   "name": "ctrluhr",
   "private": true,
   "version": "0.0.0",
-  "packageManager": "pnpm@9.0.0",
+  "type": "module",
   "scripts": {
     "dev": "nx run-many -t dev --parallel",
     "build": "nx run-many -t build",
@@ -105,9 +106,16 @@ Create `package.json` at root (workspace root — not the publishable package):
     "typecheck": "nx run-many -t typecheck",
     "test": "nx run-many -t test"
   },
+  "devEngines": {
+    "packageManager": {
+      "name": "pnpm",
+      "version": "^11.8.0",
+      "onFail": "download"
+    }
+  },
   "devDependencies": {
-    "@biomejs/biome": "^1.9.0",
-    "nx": "^19.7.0",
+    "@biomejs/biome": "2.4.5",
+    "nx": "23.0.2",
     "typescript": "^5.5.0"
   }
 }
@@ -253,7 +261,11 @@ Create `tsconfig.base.json` at repo root — all TS projects extend from this:
 Then per-package `tsconfig.json` extends from this — created in later setup
 docs (02/03/04). Don't create them now.
 
-## Step 4 — Install Biome and the Nx config
+## Step 4 — Configure Biome and Nx
+
+These are config files only — no install command runs here. Biome and Nx are
+pinned as devDependencies in the root `package.json` (Step 1) and pulled in by
+`pnpm install` in Step 7. Invoke them via `pnpm exec biome ...` / `pnpm exec nx ...`.
 
 ### `biome.json` (repo root)
 
@@ -263,13 +275,14 @@ docs (02/03/04). Don't create them now.
   "vcs": { "enabled": true, "clientKind": "git", "useIgnoreFile": true },
   "files": {
     "ignoreUnknown": true,
-    "ignore": [
-      "node_modules",
-      "dist",
-      "build",
-      ".nx",
-      "apps/daemon/vendor",
-      "**/migrations/*.sql"
+    "includes": [
+      "**",
+      "!**/node_modules",
+      "!**/dist",
+      "!**/build",
+      "!**/.nx",
+      "!**/apps/daemon/vendor",
+      "!**/migrations/*.sql"
     ]
   },
   "formatter": {
@@ -295,25 +308,33 @@ docs (02/03/04). Don't create them now.
 }
 ```
 
+We are on biome 2.x. Two things to know:
+
+- `files.includes` replaces the v1.x `files.ignore`. The leading `**` includes
+  everything, then each `!`-prefixed entry subtracts a path. Use this for
+  monorepo-wide excludes.
+- If `apps/web` (or any sub-package) ships its own `biome.json`, biome 2.x
+  treats it as a **nested** config and the root one only applies where the
+  nested one doesn't. The TanStack CLI emits a nested `apps/web/biome.json`
+  with `"root": false` already set after the first `pnpm exec biome migrate --write`.
+  Do not delete that nested file — the web's `indentStyle: "tab"` and
+  `quoteStyle: "double"` come from it.
+
 ### `nx.json` (repo root)
 
 ```json
 {
   "$schema": "./node_modules/nx/schemas/nx-schema.json",
-  "targetDefaults": {
-    "build": { "dependsOn": ["^build"], "cache": true },
-    "lint": { "cache": true },
-    "typecheck": { "cache": true }
-  },
-  "namedInputs": {
-    "default": ["{projectRoot}/**/*", "sharedGlobals"],
-    "production": ["default"],
-    "sharedGlobals": ["{workspaceRoot}/tsconfig.base.json"]
-  }
+  "defaultBase": "master",
+  "analytics": false
 }
 ```
 
-### `nx-ignore`
+`defaultBase` lives at the top level in nx 23; the older `affected.defaultBase`
+form is deprecated. `analytics: false` opts out of Nx Cloud telemetry — we
+do not register the workspace with Nx Cloud in this phase.
+
+### Lint ownership
 
 Biome and Nx coexist nicely. We do not ask Nx to lint — Biome owns lint.
 Nx owns task orchestration, caching, and the project graph.
@@ -347,7 +368,8 @@ for now (we'll tighten them in `03-api-setup.md`). Edit:
 
 - `"name"` → `"@ctrluhr/api"`
 - `"version"` → `"0.0.0"`
-- Ensure `"private": true` and `"type": "module"`
+- Ensure `"private": true`. We do **not** need `"type": "module"` here — Bun
+  defaults to ESM, so the Hono `bun` template leaves it off.
 - Ensure a `build` script and the two lint/typecheck scripts exist:
 
 ```json
@@ -389,7 +411,7 @@ and a place for tags. Add them:
 ```json
 {
   "$schema": "../../node_modules/nx/schemas/project-schema.json",
-  "name": "daemon",
+  "name": "@ctrluhr/daemon",
   "tags": ["scope:daemon", "type:binary"],
   "targets": {
     "build": {
@@ -556,16 +578,16 @@ current Vite + Nitro plugin stack.
 
 ## Done criteria for this file
 
-- [ ] Git repo initialized, `.gitignore` committed
-- [ ] `package.json`, `pnpm-workspace.yaml`, `nx.json`, `biome.json`,
+- [X] Git repo initialized, `.gitignore` committed
+- [X] `package.json`, `pnpm-workspace.yaml`, `nx.json`, `biome.json`,
   `tsconfig.base.json` at root
-- [ ] `apps/web` scaffolded by the TanStack CLI and renamed to `@ctrluhr/web`
-- [ ] `apps/api` scaffolded by the Hono CLI and renamed to `@ctrluhr/api`
-- [ ] `apps/daemon` exists with `go.mod` and a stub `main.go`; `go build ./...` works
-- [ ] `packages/schema` created by hand as `@ctrluhr/schema`
+- [x] `apps/web` scaffolded by the TanStack CLI and renamed to `@ctrluhr/web`
+- [x] `apps/api` scaffolded by the Hono CLI and renamed to `@ctrluhr/api`
+- [X] `apps/daemon` exists with `go.mod` and a stub `main.go`; `go build ./...` works
+- [x] `packages/schema` created by hand as `@ctrluhr/schema`
 - [ ] Each app has a `project.json` with tags
-- [ ] `pnpm install` succeeds
-- [ ] `pnpm exec nx show projects` lists 4 projects
+- [X] `pnpm install` succeeds
+- [X] `pnpm exec nx show projects` lists 4 projects
 - [ ] `pnpm exec biome check .` passes
 - [ ] One commit: "scaffold: nx + pnpm + biome + go monorepo skeleton"
 

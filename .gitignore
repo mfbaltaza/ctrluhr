@@ -18,8 +18,8 @@ build/
 # go
 *.exe
 *.exe~
-daemon/ctrluhr
-daemon/ctrluhr-*
+apps/daemon/ctrluhr*
+apps/daemon/daemon*
 vendor/
 
 # os/editor
@@ -36,3 +36,4 @@ npm-debug.log*
 # nx cache
 .nx/cache/
 .nx/workspace-data/
+.nx/migrate-runs

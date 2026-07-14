@@ -1,0 +1,34 @@
+{
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "name": "@ctrluhr/daemon",
+  "tags": ["scope:daemon", "type:binary"],
+  "targets": {
+    "build": {
+      "executor": "nx:run-commands",
+      "cache": true,
+      "options": {
+        "cwd": "apps/daemon",
+        "commands": [
+          "GOOS=linux GOARCH=amd64 go build -o ../../dist/ctrluhr-linux-amd64 ./...",
+          "GOOS=windows GOARCH=amd64 go build -o ../../dist/ctrluhr-windows-amd64.exe ./..."
+        ]
+      }
+    },
+    "dev": {
+      "executor": "nx:run-commands",
+      "options": { "cwd": "apps/daemon", "command": "go run . dev" }
+    },
+    "test": {
+      "executor": "nx:run-commands",
+      "options": { "cwd": "apps/daemon", "command": "go test ./..." }
+    },
+    "lint": {
+      "executor": "nx:run-commands",
+      "options": { "cwd": "apps/daemon", "command": "golangci-lint run ./..." }
+    },
+    "typecheck": {
+      "executor": "nx:run-commands",
+      "options": { "cwd": "apps/daemon", "command": "go vet ./..." }
+    }
+  }
+}
