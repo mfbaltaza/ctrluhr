@@ -104,8 +104,8 @@ for migrations). `01-monorepo-setup.md` deliberately did **not** pre-bake
 these — they land here, with the code that uses them. From the repo root:
 
 ```sh
-pnpm --filter @ctrluhr/api add drizzle-orm @neondatabase/serverless
-pnpm --filter @ctrluhr/api add -D drizzle-kit
+pnpm --filter @ctrluhr/api add drizzle-orm@1.0.0-rc.4 @neondatabase/serverless
+pnpm --filter @ctrluhr/api add -D drizzle-kit@1.0.0-rc.4
 ```
 
 `@neondatabase/serverless` is a fetch-based driver — perfect for Bun and edge
@@ -120,7 +120,7 @@ Create it (extending our base):
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "outDir": "./dist",
-    "types": ["bun-types"],
+    "types": ["bun"],
     "paths": {
       "@ctrluhr/schema": ["../../packages/schema/src/index.ts"],
       "@ctrluhr/schema/*": ["../../packages/schema/src/*"]
@@ -132,8 +132,9 @@ Create it (extending our base):
 }
 ```
 
-Installing `@types/bun` gives you `bun-types`. The Hono `bun` template from
-`01-monorepo-setup.md` usually adds it; if not, `pnpm --filter @ctrluhr/api add -D @types/bun`.
+The `@types/bun` package provides Bun type definitions under the `"bun"` name.
+The Hono `bun` template from `01-monorepo-setup.md` usually adds it; if not,
+`pnpm --filter @ctrluhr/api add -D @types/bun`.
 The `paths` aliases let `import { ActivityEventSchema } from '@ctrluhr/schema'`
 resolve in TS land. Bun itself resolves the workspace package by `name` from
 `package.json`, so it works at runtime too.
@@ -232,9 +233,9 @@ export const devices = pgTable(
     lastSeenAt: timestamp('last_seen_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   },
-  (t) => ({
-    userIdx: index('devices_user_id_idx').on(t.userId),
-  }),
+  (t) => [
+    index('devices_user_id_idx').on(t.userId),
+  ],
 );
 ```
 
@@ -262,16 +263,15 @@ export const categories = pgTable(
     embedding: vector('embedding', { dimensions: 1536 }),
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   },
-  (t) => ({
-    userUniqueName: uniqueIndex('categories_user_name_uniq').on(t.userId, t.name),
-    userIdx: index('categories_user_id_idx').on(t.userId),
-  }),
+  (t) => [
+    uniqueIndex('categories_user_name_uniq').on(t.userId, t.name),
+    index('categories_user_id_idx').on(t.userId),
+  ],
 );
 ```
 
-Note: `vector` was added to `drizzle-orm/pg-core` recently; if it's not
-exported in your installed version, bump `drizzle-orm` to `^0.33.0` or
-later. (We pinned that in 01.)
+Note: `vector` is available in `drizzle-orm/pg-core` since v0.32+.
+We're using `1.0.0-rc.4` so it's included.
 
 ### `apps/api/src/schema/category-rules.ts`
 
@@ -287,10 +287,10 @@ export const categoryRules = pgTable(
     pattern: text('pattern').notNull(),
     priority: integer('priority').default(0),
   },
-  (t) => ({
-    pk: primaryKey({ columns: [t.categoryId, t.pattern] }),
-    categoryIdx: index('category_rules_category_idx').on(t.categoryId),
-  }),
+  (t) => [
+    primaryKey({ columns: [t.categoryId, t.pattern] }),
+    index('category_rules_category_idx').on(t.categoryId),
+  ],
 );
 ```
 
@@ -329,10 +329,10 @@ export const activityEvents = pgTable(
     // reclassification without re-paying OpenAI.
     rawEmbedding: vector('raw_embedding', { dimensions: 1536 }),
   },
-  (t) => ({
-    userStartedIdx: index('activity_events_user_started_idx').on(t.userId, t.startedAt),
-    userCatIdx: index('activity_events_user_cat_idx').on(t.userId, t.categoryId, t.startedAt),
-  }),
+  (t) => [
+    index('activity_events_user_started_idx').on(t.userId, t.startedAt),
+    index('activity_events_user_cat_idx').on(t.userId, t.categoryId, t.startedAt),
+  ],
 );
 ```
 
@@ -381,9 +381,9 @@ export const habitCheckins = pgTable(
     achieved: boolean('achieved').notNull().default(false),
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   },
-  (t) => ({
-    habitDayUniq: uniqueIndex('habit_checkins_habit_day_uniq').on(t.habitId, t.day),
-  }),
+  (t) => [
+    uniqueIndex('habit_checkins_habit_day_uniq').on(t.habitId, t.day),
+  ],
 );
 ```
 
@@ -500,7 +500,7 @@ that re-exports all tables (`./src/schema/index.ts`). Double-check.
 ### `vector` type not recognized
 Several possible causes:
 1. pgvector extension not enabled on Neon — run `CREATE EXTENSION vector` again.
-2. `drizzle-orm` version too old — bump to `^0.33.0` or later.
+2. `drizzle-orm` version too old — we use `1.0.0-rc.4` which supports it.
 3. The `vector()` import not exposed from `drizzle-orm/pg-core` — check
    `node_modules/drizzle-orm/pg-core/index.d.ts` for `vector`.
 
