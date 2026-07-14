@@ -1,0 +1,15 @@
+{
+  "name": "@ctrluhr/schema",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "scripts": {
+    "build": "tsc --noEmit",
+    "lint": "biome check src",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": { "zod": "^3.23.0" },
+  "devDependencies": { "typescript": "^5.5.0" }
+}
