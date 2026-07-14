@@ -1,0 +1,38 @@
+# deps
+node_modules/
+.pnpm-store/
+
+# build outputs
+dist/
+build/
+.next/
+.vinxi/
+*.tsbuildinfo
+
+# env files
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# go
+*.exe
+*.exe~
+daemon/ctrluhr
+daemon/ctrluhr-*
+vendor/
+
+# os/editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+
+# logs
+*.log
+npm-debug.log*
+
+# nx cache
+.nx/cache/
+.nx/workspace-data/
