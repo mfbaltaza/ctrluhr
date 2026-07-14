@@ -107,20 +107,118 @@ pnpm install
 
 ## 3. better-auth setup
 
-better-auth lives in its own instance. The web app talks to it via the
-`better-auth/client` (in `04-web-setup.md`). The API mounts its Hono router
-at `/auth/*`.
+better-auth runs as its own module in `apps/api/src/auth.ts`. The web app
+talks to it through the `better-auth/client` SDK (covered in `04-web-setup.md`).
+The API mounts the handler at `/auth/*` (Hono routes everything else).
 
-### `apps/api/src/auth.ts`
+The official docs are the source of truth — don't trust this section over
+them. This section just decides *which* docs to read and *in what order*,
+because the better-auth site is huge and easy to get lost in.
+
+### 3.1 Read these in order
+
+Walk through the docs in this order. Each one is short, and they link to
+each other, so ~15 minutes total:
+
+1. **Installation** — https://www.better-auth.com/docs/installation
+   Covers the `auth.ts` shape, env vars, database wiring, and the Hono
+   handler snippet (which is exactly what we'll use in §4).
+2. **Drizzle ORM Adapter** — https://www.better-auth.com/docs/adapters/drizzle
+   This is what glues better-auth to your Drizzle schema. Read the
+   "Modifying Table Names" and "Schema generation & migration" sections
+   — both matter for us.
+3. **Magic Link plugin** — https://www.better-auth.com/docs/plugins/magic-link
+   This is the auth method. The whole reason for this section. Read the
+   "Installation" (server) and "Configuration Options" sections. Ignore
+   the client plugin for now — that's `04-web-setup.md`.
+4. **CLI** — https://www.better-auth.com/docs/concepts/cli
+   Specifically the `generate` command. This is what reconciles better-auth's
+   required columns with your Drizzle schema in §3.5.
+5. **Basic Usage → Server-Side `getSession`** — https://www.better-auth.com/docs/basic-usage#server-side
+   Bookmarks the exact API we use in `lib/session.ts` (§5).
+
+Don't read the rest yet (social providers, 2FA, organizations, etc.) — none
+of it applies to phase 0.
+
+### 3.2 Install
+
+The install command in §0 already added `better-auth`. The Drizzle adapter
+is a separate package in recent better-auth versions — check which one your
+installed `better-auth` version expects by looking at
+`node_modules/better-auth/dist/adapters/` (or `@better-auth/drizzle-adapter/`
+if that exists):
+
+```sh
+# if node_modules/@better-auth/drizzle-adapter exists:
+pnpm --filter @ctrluhr/api add @better-auth/drizzle-adapter
+
+# if node_modules/better-auth/dist/adapters/drizzle exists, skip — it's bundled
+```
+
+The official docs say `@better-auth/drizzle-adapter` is the way going forward,
+but older versions still ship the adapter inline at `better-auth/adapters/drizzle`.
+Use whichever import path your version actually exports.
+
+### 3.3 Env vars
+
+The official docs name two required env vars (see Installation page):
+
+- `BETTER_AUTH_SECRET` — random 32+ char string. Generate with
+  `openssl rand -base64 32`. The docs also have a "Generate Secret" button.
+- `BETTER_AUTH_URL` — base URL of the API (in dev: `http://localhost:3000`).
+
+Add both to `apps/api/.env` (and `apps/api/.env.example` so the team knows).
+The Hono mount in §4 doesn't need anything else from better-auth; it picks
+up `BETTER_AUTH_URL` automatically via `auth.handler`.
+
+> Heads up: this file's earlier draft used `BETTER_AUTH_BASE_URL`. That's
+> wrong — the env var is `BETTER_AUTH_URL`. The `baseURL` *config option*
+> on the `betterAuth({...})` call is a different thing; you usually don't
+> need to set it because the env var is read automatically.
+
+You'll also need `RESEND_API_KEY` (from https://resend.com/api-keys) and
+optionally `RESEND_FROM_EMAIL` (defaults to Resend's sandbox sender, which
+only delivers to your Resend-account email — perfect for phase 0 dev).
+
+### 3.4 Create `apps/api/src/auth.ts`
+
+By now you've read the five doc pages above. Write the file by following
+them — the structure should fall out naturally:
+
+- Import `betterAuth` and `magicLink` (paths per the docs for your version).
+- Import the Drizzle adapter from whichever path your version exposes.
+- Pass the adapter with `provider: 'pg'` and the `schema` mapping.
+  Because our Drizzle tables are named `users` / `sessions` / `vouchers`
+  (plural, and `vouchers` is awkwardly named — see §2 in `02-database-setup.md`),
+  use the "Modifying Table Names" pattern from the Drizzle adapter docs to
+  map better-auth's default `user` / `session` / `verification` to our
+  `users` / `sessions` / `vouchers` tables.
+- Set `emailAndPassword: { enabled: false }` — magic link only.
+- Add the `magicLink` plugin with a `sendMagicLink` callback that calls
+  `resend.emails.send({...})`. The `url` arg is the full link the user
+  clicks (better-auth appends the token as a query param) — see the
+  Magic Link plugin docs for the exact shape of the callback args.
+- `export const auth = betterAuth({...})` and `export type Auth = typeof auth`.
+
+#### Reference — what the end file should look like
+
+This is what the finished file should resemble *after* you write it by
+following the steps above. **Do not copy this verbatim** — the import
+paths and option names change between better-auth versions, and the docs
+are always more current than this snapshot. Use this to sanity-check that
+yours has the same shape, options, and side-effects:
 
 ```ts
+// apps/api/src/auth.ts — REFERENCE ONLY
+// Write this by following §3.1 docs, then compare against this.
+
 import { betterAuth } from 'better-auth';
 import { magicLink } from 'better-auth/plugins';
-import { drizzleAdapter } from 'better-auth/adapters/drizzle';
+import { drizzleAdapter } from '<per-docs-for-your-version>';  // see §3.2
 import { db } from './lib/db';
 import * as schema from './schema';
-
 import { Resend } from 'resend';
+
 const resend = new Resend(process.env.RESEND_API_KEY!);
 
 export const auth = betterAuth({
@@ -132,12 +230,10 @@ export const auth = betterAuth({
       verification: schema.vouchers,
     },
   }),
-  baseURL: process.env.BETTER_AUTH_BASE_URL!,
-  secret: process.env.BETTER_AUTH_SECRET!,
-  emailAndPassword: { enabled: false },
+  emailAndPassword: { enabled: false },       // magic link only
   plugins: [
     magicLink({
-      sendMagicLink: async ({ email, token, url }, request) => {
+      sendMagicLink: async ({ email, url }) => {
         const from = process.env.RESEND_FROM_EMAIL ?? 'ctrluhr <onboarding@resend.dev>';
         await resend.emails.send({
           from,
@@ -153,32 +249,44 @@ export const auth = betterAuth({
 export type Auth = typeof auth;
 ```
 
-Notes:
-- better-auth's `verification` table maps to our `vouchers` table (we named
-  it awkwardly in 02). Once you run this and check the schema, you may want
-  to rename `vouchers` to `verifications` — but only if it bothers you. It's
-  purely cosmetic.
-- `sendMagicLink`'s `url` is the URL the user clicks — better-auth appends
-  the token as a query param. We send it via Resend.
-  - `baseURL` is where better-auth is hosted (your API), not the web app. In
-  dev: `http://localhost:3000`.
-- `emailAndPassword: { enabled: false }` because you chose magic link only.
+### 3.5 Sync the schema
 
-### Sync better-auth schema requirements
-
-better-auth may want a few extra columns on `users`/`sessions`/`verifications`.
-Run its CLI to see:
+better-auth may want a few extra columns on `users` / `sessions` /
+`vouchers` (e.g. `emailVerified`, `image`, `expiresAt`, `token`,
+`identifier`). Run the CLI's `generate` command (per the CLI docs) to see
+what it expects:
 
 ```sh
-pnpm exec @better-auth/cli@latest generate --config src/auth.ts
+pnpm exec auth@latest generate --config src/auth.ts --output src/schema
 ```
 
-The output is a Drizzle schema snippet. Compare with your `users.ts`,
-`sessions.ts`, `verifications.ts`. Add any missing columns. Re-run
-`drizzle-kit generate` and `drizzle-kit push` to apply.
+(That command name and flags change — always check the current CLI docs
+at https://www.better-auth.com/docs/concepts/cli. Older docs called the
+package `@better-auth/cli`; current docs use the unscoped `auth` package.)
 
-This step is annoying but one-time — better-auth reads from those columns
-forever after, so you won't need to touch them again.
+It'll print a Drizzle schema diff. Compare each table to your
+`apps/api/src/schema/{users,sessions,verifications}.ts` and add the missing
+columns. Then re-run your normal migration flow:
+
+```sh
+pnpm --filter @ctrluhr/db drizzle-kit generate
+pnpm --filter @ctrluhr/db drizzle-kit push
+```
+
+This is a one-time chore. After this, better-auth reads/writes those
+columns and you'll rarely touch them again.
+
+### 3.6 What you should be able to do now
+
+Without writing any more code, you can sanity-check the install:
+
+- `bun run apps/api/src/auth.ts` should *not* throw at import time. If it
+  does, the error message will tell you what's missing (env var, column,
+  import path).
+- The CLI in §3.5 should generate a clean diff (i.e. after applying it,
+  re-running produces no further changes).
+
+If both pass, you're done with section 3. Move to §4 to mount the handler.
 
 ## 4. Hono bootstrap
 
@@ -655,18 +763,24 @@ If that works, the server boots. Next, check the auth flow:
 
 ### Manual magic-link smoke
 
+Per the magic link plugin docs (https://www.better-auth.com/docs/plugins/magic-link#sign-in-with-magic-link),
+the server endpoint is `POST /auth/sign-in/magic-link` (with the handler
+mounted at `/auth/*` as in §4):
+
 ```sh
-curl -X POST http://localhost:3000/auth/...
+curl -X POST http://localhost:3000/auth/sign-in/magic-link \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"you@youremail.dev"}'
 ```
 
-Better-auth's magic-link endpoint is a POST to `/auth/magic-link/send`. Body:
-`{ email: "you@youremail.dev" }`. Run it, then check Resend's dashboard →
-"Logs" — should show your email. Click the link in your inbox → you should
-land at your web app's `/` (we haven't built that yet, so it'll 404 — that's
-fine, the *email* mechanism working is the goal).
+Then check the Resend dashboard → "Logs" — your email should appear. Click
+the link in your inbox → you'll land at the `callbackURL` (we default to
+`/` on the web app, which 404s until `04-web-setup.md` — that's fine; the
+*email mechanism* working is the goal here).
 
-If Resend is sending to `onboarding@resend.dev` sandbox, it ONLY delivers to
-your Resend-account email. Use that email as the recipient for phase 0.
+If you're sending from `onboarding@resend.dev` (the Resend sandbox sender),
+it ONLY delivers to the email tied to your Resend account. Use that email
+as the recipient for phase 0.
 
 ## 10. Commit `[commit]`
 
@@ -679,22 +793,25 @@ git commit -m "feat(api): hono server, better-auth magic link, /events + /device
 
 ### better-auth `drizzleAdapter` rejects our `vouchers` table name
 The `verification: schema.vouchers` mapping works because better-auth's
-adapter accepts any Drizzle table the shape matches. If the column set
-differs, see `pnpm exec @better-auth/cli generate` for the shape it expects
-and add the missing columns.
+adapter accepts any Drizzle table whose shape matches. If the column set
+differs, re-run the `auth generate` CLI (per the Drizzle adapter docs'
+"Schema generation & migration" section) for the shape it expects and add
+the missing columns. Note: the CLI package is now the unscoped `auth`
+(`pnpm exec auth@latest generate ...`), not the older `@better-auth/cli`.
 
 ### `import { magicLink } from 'better-auth/plugins'` fails
-The path may differ in your installed version. Try
-`from 'better-auth/plugins/magic-link'`. Check `node_modules/better-auth/dist/plugins/`.
+The path may differ in your installed version. Check
+`node_modules/better-auth/dist/plugins/` for the actual filename, and
+verify against the Magic Link plugin docs (the docs always show the
+correct import for the current version).
 
 ### `getSession` returns null even after click
-Cookie domain mismatch. `BETTER_AUTH_BASE_URL` must match the URL your
-browser sees. If you're testing in a browser at `http://localhost:5173`
+Cookie domain mismatch. `BETTER_AUTH_URL` must match the URL your browser
+sees for the API. If you're testing in a browser at `http://localhost:5173`
 calling `http://localhost:3000`, the fetch calls to the API need
-`credentials: 'include'` AND `cors({ credentials: true })` on Hono (we set
-both). In better-auth's session cookie options, ensure the cookie is scoped
-to be readable cross-origin — see better-auth docs on "Clinton" (their
-CORS section).
+`credentials: 'include'` AND `cors({ credentials: true })` on Hono (we
+set both in §4). The better-auth docs have a CORS / cookies section
+under Integrations — read that if you hit issues, don't guess.
 
 ### `drizzle-orm/neon-serverless` not found
 Use `drizzle-orm/neon-http` instead — the package name changed. Or bump
