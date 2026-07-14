@@ -117,7 +117,7 @@ pnpm exec nx run-many -t build
 ```
 - `@ctrluhr/schema` — tsc no-op (TS only)
 - `@ctrluhr/api` — bun build artifacts in `apps/api/dist/`
-- `@ctrluhr/web` — vinxi build in `apps/web/.output/` (or wherever vinxi puts it)
+- `@ctrluhr/web` — `vite build` output in `apps/web/.output/server/index.mjs` (Nitro server bundle)
 - `daemon` — `dist/ctrluhr-linux-amd64` and `dist/ctrluhr-windows-amd64.exe`
 
 The Windows cross-compile works because Go is cool like that. You won't be

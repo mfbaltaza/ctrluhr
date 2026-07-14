@@ -6,7 +6,7 @@ node_modules/
 dist/
 build/
 .next/
-.vinxi/
+.output/
 *.tsbuildinfo
 
 # env files

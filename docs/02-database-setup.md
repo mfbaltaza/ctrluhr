@@ -100,16 +100,16 @@ never commit it.
 ## 2. Install Drizzle deps in `apps/api`
 
 Drizzle comes in two packages: `drizzle-orm` (runtime) and `drizzle-kit` (CLI
-for migrations). You already added them to `apps/api/package.json` in Step
-01 — re-run `pnpm install` to be sure:
+for migrations). `01-monorepo-setup.md` deliberately did **not** pre-bake
+these — they land here, with the code that uses them. From the repo root:
 
 ```sh
-pnpm install
+pnpm --filter @ctrluhr/api add drizzle-orm @neondatabase/serverless
+pnpm --filter @ctrluhr/api add -D drizzle-kit
 ```
 
-Add the Neon serverless driver too (already in deps):
-`@neondatabase/serverless`. This is a fetch-based driver — perfect for Bun
-and edge environments.
+`@neondatabase/serverless` is a fetch-based driver — perfect for Bun and edge
+environments.
 
 ### `apps/api/tsconfig.json`
 
@@ -132,9 +132,10 @@ Create it (extending our base):
 }
 ```
 
-Installing `@types/bun` (already in deps) gives you `bun-types`. The `paths`
-aliases let `import { ActivityEventSchema } from '@ctrluhr/schema'` resolve
-in TS land. Bun itself resolves the workspace package by `name` from
+Installing `@types/bun` gives you `bun-types`. The Hono `bun` template from
+`01-monorepo-setup.md` usually adds it; if not, `pnpm --filter @ctrluhr/api add -D @types/bun`.
+The `paths` aliases let `import { ActivityEventSchema } from '@ctrluhr/schema'`
+resolve in TS land. Bun itself resolves the workspace package by `name` from
 `package.json`, so it works at runtime too.
 
 ## 3. Drizzle schema files

@@ -19,7 +19,7 @@ saves hours of confusion:
 
 | Piece | Owns | You write |
 |---|---|---|
-| **Vinxi** | Dev server + bundler (Vite underneath) | `app.config.ts` |
+| **Vite + Nitro** | Dev server + bundler + SSR server runtime | `vite.config.ts` |
 | **TanStack Router** | Routing (file-based), type-safe params/loaders | `src/routes/**` |
 | **TanStack Query** | Async data fetching/caching/mutations | queries hooked in loaders/components |
 | **TanStack Start** | Server functions, SSR, streaming, getEvent context | `createServerFn`, `useSession` etc. |
@@ -30,68 +30,68 @@ Don't reach for Query inside loaders; do client-side mutation+invalidate
 from a component. The TanStack Start docs have a "TanStack Query Integration"
 guide — read it before writing the dashboard.
 
-## 1. Scaffold TanStack Start
+## 1. Verify the scaffold from `01-monorepo-setup.md`
 
-We could write the file tree by hand, but their CLI scaffolds the right
-versions and config. From the repo root:
+`apps/web` was already scaffolded by the TanStack CLI in `01-monorepo-setup.md`
+Step 2a, so it already has `vite.config.ts`, `tsconfig.json`, `src/router.tsx`,
+`src/routes/__root.tsx`, and `package.json` with vite/nitro-based scripts. This
+file just **layers on** the ctrluhr-specific wiring: the `@ctrluhr/schema`
+workspace dep, the `@/*` path alias, ECharts, TanStack Query, and the routes.
 
-```sh
-cd apps/web
-pnpm exec create-csroutes@latest .       # or use the documented init command
-```
+### `apps/web/tsconfig.json` — add the workspace path alias
 
-> The exact init command changes between TanStack Start versions. As of this
-> writing, the docs recommend `pnpm dlx create-csroutes@latest`. If that
-> errors, check https://tanstack.com/start/latest/docs/framework/react/quickstart
-> for the current command.
-
-If the CLI doesn't suit you, manually create:
-
-### `apps/web/app.config.ts`
-
-```ts
-import { defineConfig } from '@tanstack/react-start/config';
-import viteTsconfigPaths from 'vite-tsconfig-paths';
-
-export default defineConfig({
-  vite: { plugins: [viteTsconfigPaths()] },
-});
-```
-
-### `apps/web/tsconfig.json`
+The CLI's `tsconfig.json` doesn't know about our workspace `@ctrluhr/schema`
+package. Make it extend the repo base and add the alias:
 
 ```json
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "jsx": "react-jsx",
+    "types": ["node"],
     "paths": {
       "@/*": ["./src/*"],
       "@ctrluhr/schema": ["../../packages/schema/src/index.ts"]
     },
     "baseUrl": "."
   },
-  "include": ["src/**/*", "app.config.ts"]
+  "include": ["src/**/*", "vite.config.ts"]
 }
 ```
 
-### `apps/web/package.json` scripts
+### `apps/web/package.json` — add the schema dep and confirm scripts
 
-If not already set:
+Add the workspace dep (the CLI didn't know we have a sibling schema package):
 
 ```json
-{
-  "scripts": {
-    "dev": "vinxi dev --port 3000",
-    "build": "vinxi build",
-    "start": "vinxi start --port 3000",
-    "typecheck": "tsc --noEmit",
-    "lint": "biome check src"
-  }
+"dependencies": {
+  "@ctrluhr/schema": "workspace:*",
+  ...
 }
 ```
 
-Re-run `pnpm install` from root.
+Confirm the scripts are the Vite + Nitro ones (Step 5a of `01` already
+standardized them, but double-check):
+
+```json
+"scripts": {
+  "dev": "vite dev --port 3000",
+  "build": "vite build && tsc --noEmit",
+  "preview": "vite preview --port 3000",
+  "start": "node .output/server/index.mjs",
+  "typecheck": "tsc --noEmit",
+  "lint": "biome check src"
+}
+```
+
+### Add ECharts + TanStack Query + better-auth client
+
+```sh
+pnpm --filter @ctrluhr/web add echarts echarts-for-react \
+  @tanstack/react-query @tanstack/react-query-devtools better-auth
+```
+
+Re-run `pnpm install` from root if you edited `package.json` by hand.
 
 ### Initial `src/routes/__root.tsx`
 
@@ -596,8 +596,11 @@ File-based routing generates `routeTree.gen.ts` via its Vite plugin. If you
 see "Cannot find module './routeTree.gen'", run `pnpm dev` once — the plugin
 generates the file on first run. Commit it after regen.
 
-### `vite-tsconfig-paths` missing
-`pnpm add -D vite-tsconfig-paths` in `apps/web`.
+### `@ctrluhr/schema` or `@/*` imports don't resolve
+The CLI-generated `vite.config.ts` uses Vite's built-in `resolve.tsconfigPaths: true`
+(reads `tsconfig.json` `paths`), not the `vite-tsconfig-paths` plugin. So just
+make sure `apps/web/tsconfig.json` has the `paths` block from Step 1 and
+`vite.config.ts` has `resolve: { tsconfigPaths: true }` — no extra dep needed.
 
 ## Done criteria
 

@@ -3,13 +3,22 @@
 Goal of this file: walk you through scaffolding `ctrluhr/` as an Nx monorepo
 with pnpm workspaces, Biome for lint/format, and a Go module for the daemon.
 
+We do **not** hand-type the apps' file trees. We scaffold each app with its
+framework's own CLI (TanStack Start, Hono) so we get correct baselines
+(`vite.config.ts`, `src/router.tsx`, `src/index.ts`, etc.) for free, then
+retrofit the generated apps into the pnpm workspace + Nx project graph.
+`packages/schema` is a tiny TS package with no framework CLI — we create it by
+hand. `apps/daemon` is Go — `go mod init` is its CLI.
+
 You will end up with:
 
 - A git repo at `/home/btz/Code/ctrluhr`
 - `nx.json`, root `package.json`, `pnpm-workspace.yaml`, `biome.json`, `tsconfig.base.json`
-- Empty `apps/api`, `apps/web`, `apps/daemon`, `packages/schema`, `infra/`
-- A Go module at `apps/daemon/go.mod`
-- `nx run-many -t build` works (even if builds do nothing yet)
+- `apps/api` scaffolded by the Hono CLI, renamed to `@ctrluhr/api`
+- `apps/web` scaffolded by the TanStack CLI, renamed to `@ctrluhr/web`
+- `apps/daemon` with a `go.mod` and a stub `main.go`
+- `packages/schema` created by hand as a workspace TS package
+- `nx run-many -t build` works (even if builds are the framework defaults)
 - `biome check .` passes
 
 ## Prerequisites (install once before you begin)
@@ -49,7 +58,7 @@ node_modules/
 dist/
 build/
 .next/
-.vinxi/
+.output/
 *.tsbuildinfo
 
 # env files
@@ -117,21 +126,74 @@ packages:
 Note: `apps/daemon` is Go, not pnpm — that's fine, it simply won't match any
 package.json. Nx will still treat it as a project via its `project.json`.
 
-## Step 2 — Create the directory skeleton
+## Step 2 — Scaffold the apps
+
+We could pre-create deep `src/{routes,lib,...}` trees by hand and stub every
+`package.json` ourselves — the earlier version of this doc did. The trouble:
+empty `src/` dirs don't make a runnable app. You still need
+`vite.config.ts`, `tsconfig.json`, `src/router.tsx`, `src/routes/__root.tsx`,
+`src/index.ts`, `index.html`, etc., and writing those by hand is exactly what
+the framework CLIs are for. Each CLI produces a correct, current, runnable
+baseline for free; later docs (03/04/05) then add the ctrluhr-specific files on
+top. This also avoids the double-source-of-truth where the pre-created tree
+goes stale (e.g. the original mkdir never created `apps/daemon/auth/`, which
+`05-daemon-setup.md` needs).
+
+If you already stubbed `apps/api` or `apps/web` from an earlier version of this
+file, delete them first:
 
 ```sh
-mkdir -p apps/api/src/{routes,lib,schema}
-mkdir -p apps/api/migrations
-mkdir -p apps/web/src/{routes/_auth,lib/charts,components}
-mkdir -p apps/daemon/{tracker,uplink,config,tray}
-mkdir -p packages/schema/src
-mkdir -p infra/docker
+rm -rf apps/api apps/web
 ```
 
-Place a stub `package.json` in each TS app/package so pnpm/Nx can see them.
-We'll fill them in properly in later steps; for now they're shells.
+### Step 2a — Scaffold `apps/web` with the TanStack CLI
 
-### `packages/schema/package.json`
+Run from the repo root:
+
+```sh
+pnpm dlx @tanstack/cli@latest create
+```
+
+Point the CLI at `apps/web`. Pick the Vite-based Start template (the default).
+This generates `apps/web/package.json`, `vite.config.ts`, `tsconfig.json`,
+`src/router.tsx`, `src/routeTree.gen.ts` (after first dev run),
+`src/routes/__root.tsx`, `index.html`, etc.
+
+> The CLI prompts change between releases. If `pnpm dlx @tanstack/cli` errors
+> or its flags look different, follow the current Quickstart:
+> https://tanstack.com/start/latest/docs/framework/react/getting-started
+
+We do **not** pre-bake `echarts`, `@tanstack/react-query`, `better-auth/react`,
+the `@ctrluhr/schema` workspace dep, or the `lint`/`typecheck` scripts here.
+Those land in `04-web-setup.md` as each feature gets built. Right now we keep
+the CLI's output untouched except for the retrofit tweaks in Step 5.
+
+### Step 2b — Scaffold `apps/api` with the Hono CLI
+
+```sh
+pnpm create hono@latest apps/api
+```
+
+Pick the `bun` template when prompted (we serve the API with Bun). This
+generates `apps/api/package.json`, `src/index.ts`, `tsconfig.json`,
+`bunfig.toml` if needed. Run `pnpm install` only after Step 2c so pnpm hoists
+across the whole workspace.
+
+As with the web app, we do **not** pre-bake `drizzle-orm`, `better-auth`,
+`@hono/zod-validator`, `@neondatabase/serverless`, `resend`, `openai`, etc.
+here. Those land in `03-api-setup.md` with the code that uses them.
+
+### Step 2c — Create `packages/schema` by hand
+
+No CLI matches a tiny workspace-only TS package, so create it directly:
+
+```sh
+mkdir -p packages/schema/src
+```
+
+`packages/schema/package.json` — the only `package.json` in this repo we write
+by hand end-to-end:
+
 ```json
 {
   "name": "@ctrluhr/schema",
@@ -150,84 +212,17 @@ We'll fill them in properly in later steps; for now they're shells.
 }
 ```
 
-### `apps/api/package.json`
-```json
-{
-  "name": "@ctrluhr/api",
-  "version": "0.0.0",
-  "private": true,
-  "type": "module",
-  "scripts": {
-    "dev": "bun --watch src/index.ts",
-    "build": "bun build src/index.ts --target bun --outdir dist",
-    "start": "bun dist/index.js",
-    "lint": "biome check src",
-    "typecheck": "tsc --noEmit"
-  },
-  "dependencies": {
-    "@ctrluhr/schema": "workspace:*",
-    "hono": "^4.6.0",
-    "@hono/zod-validator": "^0.4.0",
-    "drizzle-orm": "^0.33.0",
-    "better-auth": "^1.0.0",
-    "@better-auth/magic-link": "^1.0.0",
-    "resend": "^4.0.0",
-    "openai": "^4.70.0",
-    "@neondatabase/serverless": "^0.10.0",
-    "zod": "^3.23.0"
-  },
-  "devDependencies": {
-    "@types/bun": "^1.1.0",
-    "drizzle-kit": "^0.25.0",
-    "typescript": "^5.5.0"
-  }
-}
+Add a stub `packages/schema/src/index.ts` so the `main` resolves:
+
+```ts
+export {};
 ```
 
-Note: the exact package versions above are starting points. Run `pnpm install`
-once and let pnpm resolve; if `better-auth` plugins have a different import
-path (see their docs), adjust. Anthropic SDK not needed until phase 4.
+### Step 2d — `apps/daemon`
 
-### `apps/web/package.json`
-```json
-{
-  "name": "@ctrluhr/web",
-  "version": "0.0.0",
-  "private": true,
-  "type": "module",
-  "scripts": {
-    "dev": "vinxi dev --port 3000",
-    "build": "vinxi build",
-    "start": "vinxi start --port 3000",
-    "lint": "biome check src",
-    "typecheck": "tsc --noEmit"
-  },
-  "dependencies": {
-    "@ctrluhr/schema": "workspace:*",
-    "@tanstack/react-start": "^1.0.0",
-    "@tanstack/react-router": "^1.90.0",
-    "@tanstack/react-query": "^5.60.0",
-    "@tanstack/react-query-devtools": "^5.60.0",
-    "echarts": "^5.5.0",
-    "echarts-for-react": "^3.0.2",
-       "react": "^19.0.0",
-    "react-dom": "^19.0.0",
-    "hono": "^4.6.0"
-  },
-  "devDependencies": {
-    "@types/react": "^19.0.0",
-    "@types/react-dom": "^19.0.0",
-    "typescript": "^5.5.0",
-    "vinxi": "^0.5.0"
-  }
-}
-```
-
-Note: TanStack Start bundles `@tanstack/react-router` — the explicit dep is
-belt-and-braces; remove if duplicated during pnpm install.
-
-### `apps/daemon` — leave without `package.json`. It's Go-only.
-Create `apps/daemon/go.mod` directly (Step 4 below).
+`apps/daemon` has no `package.json` — it's Go-only. Create the module and a
+stub `main.go` in **Step 6** below. For now just `mkdir -p apps/daemon`. Nx
+will discover it later via `apps/daemon/project.json` (Step 5).
 
 ## Step 3 — TypeScript base config
 
@@ -323,12 +318,54 @@ docs (02/03/04). Don't create them now.
 Biome and Nx coexist nicely. We do not ask Nx to lint — Biome owns lint.
 Nx owns task orchestration, caching, and the project graph.
 
-## Step 5 — Add `project.json` per app
+## Step 5 — Retrofit the generated apps into the monorepo
+
+The CLIs in Step 2 produced real, runnable apps but with their own naming and
+script conventions. We now bend them into shape for the Nx + pnpm workspace.
+
+### 5a — Rename the packages and standardize scripts
+
+Open each CLI-generated `package.json` and make these edits. Leave the
+dependencies the CLI chose alone (we'll add domain deps in docs 03/04).
+
+**`apps/web/package.json`** — the TanStack CLI already wrote `dev`/`build`/
+`start` scripts that match our expectations (Vite + Nitro). Only edit:
+
+- `"name"` → `"@ctrluhr/web"`
+- `"version"` → `"0.0.0"` (CLIs may use `1.0.0`)
+- Ensure `"private": true`
+- Ensure these two scripts exist so `nx run-many -t lint typecheck` finds them:
+
+```json
+"lint": "biome check src",
+"typecheck": "tsc --noEmit"
+```
+
+**`apps/api/package.json`** — the Hono `bun` template wrote `dev`/`start`
+around `bun run --watch src/index.ts` and `bun run src/index.ts`. Keep those
+for now (we'll tighten them in `03-api-setup.md`). Edit:
+
+- `"name"` → `"@ctrluhr/api"`
+- `"version"` → `"0.0.0"`
+- Ensure `"private": true` and `"type": "module"`
+- Ensure a `build` script and the two lint/typecheck scripts exist:
+
+```json
+"build": "bun build src/index.ts --target bun --outdir dist",
+"lint": "biome check src",
+"typecheck": "tsc --noEmit"
+```
+
+Do **not** add `"@ctrluhr/schema": "workspace:*"` yet — the schema package
+exists but has no exports worth importing. We'll add that dep in `03-api-setup.md`
+and `04-web-setup.md` when the first real import lands.
+
+### 5b — Add `project.json` per app
 
 Nx discovers projects via `package.json` OR `project.json`. For TS apps, the
 `package.json` is enough (Nx reads its `scripts`). But explicit `project.json`
-gives us per-project control over cross-project targets (like Go cross-compile).
-Add them:
+gives us per-project control over cross-project targets (like Go cross-compile)
+and a place for tags. Add them:
 
 ### `apps/api/project.json`
 ```json
@@ -460,11 +497,16 @@ malformed.
 
 ```sh
 pnpm exec biome --version
+pnpm exec biome check --write .
 pnpm exec biome check .
 ```
 
-Expect: a few warnings on empty source files (none yet), but no errors. If
-Biome complains about the config itself, fix the schema path.
+The TanStack and Hono CLIs emit code with their own formatting (double quotes,
+no semicolons, etc.) that doesn't match our `biome.json` (single quotes,
+semicolons). The `--write` run rewrites the generated files to our style;
+the second run should be clean. Skim the diff `git diff` afterwards — it
+should be purely cosmetic (quotes/semicolons/commas). If Biome complains about
+the config itself, fix the schema path.
 
 ## Step 9 — Optional initial docs commit `[commit]`
 
@@ -502,19 +544,26 @@ serving. That's intentional. `bun` should be available on PATH globally for
 Step 7+ (api dev).
 
 ### TanStack Start versions
-The `vinxi`, `@tanstack/react-start` versions are moving targets. When you
-actually scaffold `apps/web` in Step 04, run their CLI initializer instead of
-relying on the versions in the package.json above — it will install the
-latest compatible versions. Update `apps/web/package.json` accordingly.
+The `@tanstack/react-start` and `vite` / `@vitejs/plugin-react` / `nitro`
+versions are moving targets. We scaffold `apps/web` with
+`pnpm dlx @tanstack/cli@latest create` in Step 2a so we always get the latest
+compatible versions. If the CLI's prompts or output differ from what's
+described here, follow the current Quickstart:
+https://tanstack.com/start/latest/docs/framework/react/getting-started
+`04-web-setup.md` then layers auth/routes/charts on top of whatever the CLI
+produced. The setup above drops the older `vinxi` runtime in favour of the
+current Vite + Nitro plugin stack.
 
 ## Done criteria for this file
 
 - [ ] Git repo initialized, `.gitignore` committed
 - [ ] `package.json`, `pnpm-workspace.yaml`, `nx.json`, `biome.json`,
   `tsconfig.base.json` at root
-- [ ] `apps/{api,web,daemon}` and `packages/schema` directories exist with
-  stub `package.json` (Go module for daemon)
-- [ ] `apps/daemon/go.mod` initialized and `go build ./...` works
+- [ ] `apps/web` scaffolded by the TanStack CLI and renamed to `@ctrluhr/web`
+- [ ] `apps/api` scaffolded by the Hono CLI and renamed to `@ctrluhr/api`
+- [ ] `apps/daemon` exists with `go.mod` and a stub `main.go`; `go build ./...` works
+- [ ] `packages/schema` created by hand as `@ctrluhr/schema`
+- [ ] Each app has a `project.json` with tags
 - [ ] `pnpm install` succeeds
 - [ ] `pnpm exec nx show projects` lists 4 projects
 - [ ] `pnpm exec biome check .` passes

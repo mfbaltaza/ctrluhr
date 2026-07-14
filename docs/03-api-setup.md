@@ -23,14 +23,19 @@ and post events.
 - **Auth setup**: Hono middleware verifies the session cookie or the device
   `Authorization: Bearer <jwt>` — both at the middleware layer, never inline per route.
 
-## 0. Re-install deps
+## 0. Install the API deps
+
+`01-monorepo-setup.md` scaffolded `apps/api` with the Hono CLI (which added
+`hono`) but deliberately did **not** pre-bake the domain deps — they land here
+with the code that uses them. `02-database-setup.md` already installed
+`drizzle-orm` / `drizzle-kit` / `@neondatabase/serverless`. From the repo root:
 
 ```sh
-pnpm install
+pnpm --filter @ctrluhr/api add better-auth resend openai jose @hono/zod-validator
 ```
 
-You already added everything in `01-monorepo-setup.md`. Verify `apps/api/node_modules`
-exists and contains `hono`, `better-auth`, `resend`, `openai`, `drizzle-orm`, `@neondatabase/serverless`.
+Verify `apps/api/node_modules` now contains `hono`, `better-auth`, `resend`,
+`openai`, `jose`, `drizzle-orm`, `@neondatabase/serverless`.
 
 ## 1. The DB client
 
@@ -286,8 +291,7 @@ export async function verifyDeviceJwt(token: string): Promise<{ deviceId: string
 }
 ```
 
-Add `jose` to `apps/api/package.json` deps: `"jose": "^5.9.0"`, then
-`pnpm install`.
+`jose` was already installed in §0. If you skipped that, `pnpm --filter @ctrluhr/api add jose` now.
 
 ### `apps/api/src/lib/device-auth.ts` — middleware verifying the device JWT
 

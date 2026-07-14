@@ -1,0 +1,18 @@
+{
+  "name": "ctrluhr",
+  "private": true,
+  "version": "0.0.1",
+  "packageManager": "pnpm@9.0.0",
+  "scripts": {
+    "dev": "nx run-many -t dev --parallel",
+    "build": "nx run-many -t build",
+    "lint": "nx run-many -t lint",
+    "typecheck": "nx run-many -t typecheck",
+    "test": "nx run-many -t test"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^1.9.0",
+    "nx": "^19.7.0",
+    "typescript": "^5.5.0"
+  }
+}
