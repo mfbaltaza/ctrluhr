@@ -1,8 +1,16 @@
 {
+  "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "strict": true,
     "types": ["bun"],
     "jsx": "react-jsx",
-    "jsxImportSource": "hono/jsx"
-  }
+    "jsxImportSource": "hono/jsx",
+    "paths": {
+      "@ctrluhr/schema": ["../../packages/schema/src/index.ts"],
+      "@ctrluhr/schema/*": ["../../packages/schema/src/*"]
+    },
+    "baseUrl": "."
+  },
+  "include": ["src/**/*", "migrations/**/*.ts"],
+  "exclude": ["node_modules", "dist"]
 }

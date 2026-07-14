@@ -520,12 +520,12 @@ Drizzle-kit doesn't auto-load `.env` files. Two solutions:
 
 ## Done criteria
 
-- [ ] Neon project created, connection string saved to `.env` (not committed)
-- [ ] pgvector extension enabled (verified via `pg_extension` query)
-- [ ] Resend API key saved to `.env`
+- [X] Neon project created, connection string saved to `.env` (not committed)
+- [X] pgvector extension enabled (verified via `pg_extension` query)
+- [X] Resend API key saved to `.env`
 - [ ] OpenAI API key saved to `.env`
 - [ ] `BETTER_AUTH_SECRET` generated and saved to `.env`
-- [ ] `.env.example` committed with placeholders
+- [X] `.env.example` committed with placeholders
 - [ ] All 9 Drizzle schema files written and exports re-exported
 - [ ] `drizzle.config.ts` configured
 - [ ] First migration generated (or push applied) — all tables exist in DB
