@@ -58,7 +58,7 @@ Each file is self-contained for its phase. Read them in order the first time:
 
 ## Phase you are currently on
 
-Phase 0 — MVP plumbing. Goal: synthetic event from a stub daemon shows up on your React dashboard, behind magic-link auth. Real tracking starts in phase 1.
+Phase 0 — MVP plumbing. Monorepo skeleton (Nx + pnpm + Biome + Go module) is in place; next: 02-database-setup. Goal: synthetic event from a stub daemon shows up on your React dashboard, behind magic-link auth. Real tracking starts in phase 1.
 
 ## Rules of engagement for self-building
 

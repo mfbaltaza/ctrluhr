@@ -588,8 +588,8 @@ current Vite + Nitro plugin stack.
 - [ ] Each app has a `project.json` with tags
 - [X] `pnpm install` succeeds
 - [X] `pnpm exec nx show projects` lists 4 projects
-- [ ] `pnpm exec biome check .` passes
-- [ ] One commit: "scaffold: nx + pnpm + biome + go monorepo skeleton"
+- [X] `pnpm exec biome check .` passes
+- [X] One commit: "scaffold: nx + pnpm + biome + go monorepo skeleton"
 
 Next file: `02-database-setup.md` — Neon project, enable pgvector, write
 Drizzle schema, push your first migration.
