@@ -1,5 +1,3 @@
-// apps/web/src/routes/_auth/devices.tsx — REFERENCE ONLY
-
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
 import { useState } from "react";
@@ -33,19 +31,26 @@ function DevicesPage() {
 
 			<ul className="space-y-2">
 				{isLoading && <li>Loading…</li>}
-				{data?.devices?.map((d) => (
-					<li
-						key={d.id}
-						className="flex justify-between border-b border-zinc-800 py-2"
-					>
-						<span>
-							{d.name} <span className="text-zinc-500">({d.os})</span>
-						</span>
-						<span className="text-zinc-500">
-							{d.last_seen_at ?? "never seen"}
-						</span>
-					</li>
-				))}
+				{data?.devices?.map(
+					(d: {
+						id: string;
+						name: string;
+						os: string;
+						last_seen_at?: string;
+					}) => (
+						<li
+							key={d.id}
+							className="flex justify-between border-b border-zinc-800 py-2"
+						>
+							<span>
+								{d.name} <span className="text-zinc-500">({d.os})</span>
+							</span>
+							<span className="text-zinc-500">
+								{d.last_seen_at ?? "never seen"}
+							</span>
+						</li>
+					),
+				)}
 			</ul>
 
 			<form
@@ -69,7 +74,7 @@ function DevicesPage() {
 					<option value="windows">Windows</option>
 					<option value="darwin">macOS</option>
 				</select>
-				<button className="px-4 py-2 rounded bg-emerald-600" type="button">
+				<button className="px-4 py-2 rounded bg-emerald-600">
 					Create device
 				</button>
 			</form>
