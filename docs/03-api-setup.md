@@ -1248,7 +1248,7 @@ Run `pnpm add jose` in `apps/api`.
 
 ## Done criteria
 
-- [ ] `bun run src/index.ts` boots Hono on `:3000`
+- [X] `bun run src/index.ts` boots Hono on `:3000`
 - [ ] `curl /healthz` returns `{ ok: true }`
 - [ ] `POST /auth/sign-in/magic-link` sends an email (visible in Resend logs)
 - [ ] Session cookie set with a real login (you can verify by hitting an
