@@ -744,6 +744,32 @@ check two things in order:
 If both are true and `getSession` still returns null, the better-auth
 docs have a CORS / cookies section under Integrations — read it.
 
+### SSR session check fails: cookie not forwarded to API
+
+> **CAUTION — deferred.** The `_auth.tsx` `beforeLoad` calls
+> `auth.getSession()` which hits `:3000`. During SSR, the Nitro server
+> runs this check — but the browser's session cookie lives on `:3000`,
+> not `:5173`, so the SSR context has no cookie to send. Result:
+> `beforeLoad` sees no session and redirects to `/login` even for users
+> who are already logged in. On hydration the client re-checks, discovers
+> the session, and re-renders the dashboard — causing a flash of the
+> login page.
+>
+> **When this matters:** when the API is running and a logged-in user
+> hits an auth-gated route directly (hard reload or first visit).
+>
+> **Proper fixes (pick one):**
+>
+> 1. **Forward cookies in `beforeLoad`** — use `getEvent()` from
+>    `@tanstack/react-start` to read the incoming request's `Cookie`
+>    header and forward it to the API call. SSR has the session.
+> 2. **Proxy `/api/*` through Nitro** — add a Nitro server handler that
+>    forwards API calls. The browser talks to `:5173` only; cookies stay
+>    same-origin.
+>
+> For phase 0 this is deferred. The `errorComponent` on `__root.tsx`
+> catches unhandled fetch errors and redirects to `/login` as a fallback.
+
 ### ECharts renders blank
 ECharts needs an explicit height on its container. We set
 `style={{ height: 320 }}` on the container — that's the requirement.
@@ -782,5 +808,4 @@ needed.
 - [X] `pnpm typecheck` passes
 - [X] One commit: "feat(web): tanstack start app, magic-link auth, dashboard + devices"
 
-Next file: `05-daemon-setup.md` — Go daemon with stub tracker, uplink
-client, tray, enrollment CLI.
+- [ ] Optional: fix SSR session cookie forwarding (see "SSR session check fails" in Common pitfalls)
