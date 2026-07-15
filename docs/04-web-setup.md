@@ -55,7 +55,9 @@ file just **layers on** the ctrluhr-specific wiring.
 2. **TanStack Router — file-based routing** — https://tanstack.com/router/latest/docs/framework/react/routing/file-based-routing
    How the file tree under `src/routes/` maps to URLs. We use the
    "pathless layout" pattern (`_auth.tsx` as a group with no URL prefix)
-   for the auth-gated routes — read the "Pathless Route Group" section.
+   for the auth-gated routes — see also
+   [Pathless Layout Routes](https://tanstack.com/router/latest/docs/routing/routing-concepts#pathless-layout-routes)
+   and [Pathless Route Group Directories](https://tanstack.com/router/latest/docs/routing/routing-concepts#pathless-route-group-directories).
 3. **Vite — `resolve.tsconfigPaths`** — https://vite.dev/config/shared-options#resolve-tsconfigpaths
    Why the CLI-generated `vite.config.ts` already has path-alias support
    without needing the `vite-tsconfig-paths` plugin. (This is a frequent
@@ -384,7 +386,10 @@ which runs before the route's component renders.
    https://tanstack.com/router/latest/docs/framework/react/routing/file-based-routing
    The `_auth.tsx` file (note the leading underscore) is a pathless
    layout. URLs under `_auth/dashboard.tsx` become `/dashboard`, not
-   `/_auth/dashboard`.
+   `/_auth/dashboard`. See
+   [Pathless Layout Routes](https://tanstack.com/router/latest/docs/routing/routing-concepts#pathless-layout-routes)
+   for the full pattern (prefix-`_` layout file, `<Outlet />` in the
+   component, no URL segment contributed).
 
 ### 5.2 Write `apps/web/src/routes/_auth.tsx`
 
