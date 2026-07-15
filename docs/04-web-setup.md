@@ -52,7 +52,7 @@ file just **layers on** the ctrluhr-specific wiring.
    The full project shape: where routes live, how the dev server boots,
    what the CLI scaffolded. Skim if you didn't just scaffold; deep read
    if you did.
-2. **TanStack Router — file-based routing** — https://tanstack.com/router/latest/docs/framework/react/guide/file-based-routing
+2. **TanStack Router — file-based routing** — https://tanstack.com/router/latest/docs/framework/react/routing/file-based-routing
    How the file tree under `src/routes/` maps to URLs. We use the
    "pathless layout" pattern (`_auth.tsx` as a group with no URL prefix)
    for the auth-gated routes — read the "Pathless Route Group" section.
@@ -286,7 +286,7 @@ host (`:3000/auth/callback/...`); the API redirects to your web app's
    The `callbackURL` is where the user lands after clicking the link
    in their email.
 2. **TanStack Router — file-based route declaration** —
-   https://tanstack.com/router/latest/docs/framework/react/guide/file-based-routing
+   https://tanstack.com/router/latest/docs/framework/react/routing/file-based-routing
    How `src/routes/login.tsx` becomes `/login` with no extra config.
 
 ### 4.2 Write `apps/web/src/routes/login.tsx`
@@ -381,7 +381,7 @@ which runs before the route's component renders.
    "Redirecting" subsection for the `throw redirect({ to: '/login', search: { redirect: ... } })`
    shape.
 2. **TanStack Router — pathless route groups** —
-   https://tanstack.com/router/latest/docs/framework/react/guide/file-based-routing#pathless-route-groups
+   https://tanstack.com/router/latest/docs/framework/react/routing/file-based-routing
    The `_auth.tsx` file (note the leading underscore) is a pathless
    layout. URLs under `_auth/dashboard.tsx` become `/dashboard`, not
    `/_auth/dashboard`.
