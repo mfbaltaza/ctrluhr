@@ -363,19 +363,12 @@ of `03-api-setup.md` and the better-auth Magic Link plugin docs.
 
 ```tsx
 // apps/web/src/routes/login.tsx — REFERENCE ONLY
-// (the createRoute/getParentRoute call is what file-based routing generates
-//  for you; the component is what you write by hand.)
 
 import { useState } from 'react';
-import { createRoute } from '@tanstack/react-router';
-import { Route as RootRoute } from './__root';
+import { createFileRoute } from '@tanstack/react-router';
 import { signIn } from '../lib/auth-client';
 
-export const Route = createRoute({
-  getParentRoute: () => RootRoute,
-  path: '/login',
-  component: LoginPage,
-});
+export const Route = createFileRoute('/login')({ component: LoginPage });
 
 function LoginPage() {
   const [email, setEmail] = useState('');
@@ -449,8 +442,8 @@ which runs before the route's component renders.
 
 ### 5.2 Write `apps/web/src/routes/_auth.tsx`
 
-The layout route. `id: '_auth'` is the internal identifier TanStack
-Router uses; the URL prefix is empty because the filename starts with `_`.
+The layout route. The URL prefix is empty because the filename starts with
+`_` — the `_auth` group is inferred from the file path by the Vite plugin.
 
 `beforeLoad` checks the session via `auth.getSession()` (per the
 better-auth React client docs). If no session, throw a redirect to
@@ -463,13 +456,10 @@ authenticate.
 ```tsx
 // apps/web/src/routes/_auth.tsx — REFERENCE ONLY
 
-import { Outlet, createRoute, redirect } from '@tanstack/react-router';
+import { Outlet, createFileRoute, redirect } from '@tanstack/react-router';
 import { auth } from '../lib/auth-client';
-import { Route as RootRoute } from './__root';
 
-export const Route = createRoute({
-  getParentRoute: () => RootRoute,
-  id: '_auth',
+export const Route = createFileRoute('/_auth')({
   beforeLoad: async ({ location }) => {
     const { data: session } = await auth.getSession();
     if (!session) {
@@ -480,11 +470,10 @@ export const Route = createRoute({
 });
 ```
 
-`_auth/dashboard.tsx` and `_auth/devices.tsx` then declare
-`getParentRoute: () => AuthRoute` (where `AuthRoute` is the import of the
-above) so they live under the auth gate. File-based routing handles the
-file-tree-to-URL mapping; the only thing the file declares is the
-`getParentRoute` parent.
+`_auth/dashboard.tsx` and `_auth/devices.tsx` are placed in the `_auth/`
+directory and require no extra parent wiring — the Vite plugin reads the
+directory structure and auto-generates the parent-child relationship in
+`routeTree.gen.ts`.
 
 ## 6. Devices route
 
@@ -517,10 +506,13 @@ token returned by the API is shown in a copyable box.
 // apps/web/src/routes/_auth/devices.tsx — REFERENCE ONLY
 
 import { useState } from 'react';
+import { createFileRoute } from '@tanstack/react-router';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { listDevices, createDevice } from '../../lib/api';
 
-export default function DevicesPage() {
+export const Route = createFileRoute('/devices')({ component: DevicesPage });
+
+function DevicesPage() {
   const qc = useQueryClient();
   const { data, isLoading } = useQuery({ queryKey: ['devices'], queryFn: listDevices });
   const [name, setName] = useState('my-laptop');
@@ -663,11 +655,14 @@ fixes the API to return hourly data (this is exactly what
 ```tsx
 // apps/web/src/routes/_auth/dashboard.tsx — REFERENCE ONLY
 
+import { createFileRoute } from '@tanstack/react-router';
 import { useQuery } from '@tanstack/react-query';
 import { getDay } from '../../lib/api';
 import { DayTimelineChart, type DayTimelinePoint } from '../../lib/charts/dayTimeline';
 
-export default function DashboardPage() {
+export const Route = createFileRoute('/dashboard')({ component: DashboardPage });
+
+function DashboardPage() {
   const today = new Date().toISOString().slice(0, 10);
   const { data, isLoading } = useQuery({
     queryKey: ['day', today],
