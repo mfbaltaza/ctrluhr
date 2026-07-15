@@ -11,6 +11,14 @@ By end of this file you can log in with your email, see a basic dashboard,
 create a device, and copy the token for the daemon.
 
 > Assumes `03-api-setup.md` is done and the API boots on `:3000`.
+>
+> **Doc convention:** this file follows the docs-as-source-of-truth pattern
+> from `docs/README.md` and `00-plan-overview.md` §0. For every library
+> used (TanStack Start, TanStack Router, TanStack Query, better-auth React
+> client, ECharts) the doc points you at the official docs and shows a
+> reference of the end-state shape. For our own business logic (auth
+> gate flow, devices page layout, dashboard chart shape) the doc goes
+> heavier on code + "why".
 
 ## 0. Background — TanStack Start mental model
 
@@ -21,47 +29,46 @@ saves hours of confusion:
 |---|---|---|
 | **Vite + Nitro** | Dev server + bundler + SSR server runtime | `vite.config.ts` |
 | **TanStack Router** | Routing (file-based), type-safe params/loaders | `src/routes/**` |
-| **TanStack Query** | Async data fetching/caching/mutations | queries hooked in loaders/components |
-| **TanStack Start** | Server functions, SSR, streaming, getEvent context | `createServerFn`, `useSession` etc. |
+| **TanStack Query** | Async data fetching/caching/mutations | queries hooked in components |
+| **TanStack Start** | Server functions, SSR, streaming, getEvent context | `createServerFn` etc. |
 
 Rule of thumb: **Route loaders do server-side fetches for initial page
 render; TanStack Query handles cross-route mutations and revalidation.**
-Don't reach for Query inside loaders; do client-side mutation+invalidate
-from a component. The TanStack Start docs have a "TanStack Query Integration"
-guide — read it before writing the dashboard.
+Don't reach for Query inside loaders; do client-side mutation + invalidate
+from a component. The TanStack Router docs have a "Data Loading" guide —
+read that before writing the dashboard:
+https://tanstack.com/router/latest/docs/framework/react/guide/data-loading
 
-## 1. Verify the scaffold from `01-monorepo-setup.md`
+## 1. Verify the scaffold and add the workspace deps
 
 `apps/web` was already scaffolded by the TanStack CLI in `01-monorepo-setup.md`
 Step 2a, so it already has `vite.config.ts`, `tsconfig.json`, `src/router.tsx`,
 `src/routes/__root.tsx`, and `package.json` with vite/nitro-based scripts. This
-file just **layers on** the ctrluhr-specific wiring: the `@ctrluhr/schema`
-workspace dep, the `@/*` path alias, ECharts, TanStack Query, and the routes.
+file just **layers on** the ctrluhr-specific wiring.
 
-### `apps/web/tsconfig.json` — add the workspace path alias
+### 1.1 Read these in order
+
+1. **TanStack Start — Quick Start** — https://tanstack.com/start/latest/docs/framework/react/quick-start
+   The full project shape: where routes live, how the dev server boots,
+   what the CLI scaffolded. Skim if you didn't just scaffold; deep read
+   if you did.
+2. **TanStack Router — file-based routing** — https://tanstack.com/router/latest/docs/framework/react/guide/file-based-routing
+   How the file tree under `src/routes/` maps to URLs. We use the
+   "pathless layout" pattern (`_auth.tsx` as a group with no URL prefix)
+   for the auth-gated routes — read the "Pathless Route Group" section.
+3. **Vite — `resolve.tsconfigPaths`** — https://vite.dev/config/shared-options#resolve-tsconfigpaths
+   Why the CLI-generated `vite.config.ts` already has path-alias support
+   without needing the `vite-tsconfig-paths` plugin. (This is a frequent
+   Stack Overflow rabbit hole — skip it.)
+
+### 1.2 Path aliases and workspace dep
 
 The CLI's `tsconfig.json` doesn't know about our workspace `@ctrluhr/schema`
-package. Make it extend the repo base and add the alias:
+package or our `@/*` alias. Edit it to extend the repo base and add the
+aliases. The `paths` block is what both TS and Vite (via
+`resolve.tsconfigPaths`) read.
 
-```json
-{
-  "extends": "../../tsconfig.base.json",
-  "compilerOptions": {
-    "jsx": "react-jsx",
-    "types": ["node"],
-    "paths": {
-      "@/*": ["./src/*"],
-      "@ctrluhr/schema": ["../../packages/schema/src/index.ts"]
-    },
-    "baseUrl": "."
-  },
-  "include": ["src/**/*", "vite.config.ts"]
-}
-```
-
-### `apps/web/package.json` — add the schema dep and confirm scripts
-
-Add the workspace dep (the CLI didn't know we have a sibling schema package):
+Add the workspace dep in `package.json`:
 
 ```json
 "dependencies": {
@@ -70,80 +77,80 @@ Add the workspace dep (the CLI didn't know we have a sibling schema package):
 }
 ```
 
-Confirm the scripts are the Vite + Nitro ones (Step 5a of `01` already
-standardized them, but double-check):
+### 1.3 Install the runtime deps
 
-```json
-"scripts": {
-  "dev": "vite dev --port 5173",
-  "build": "vite build && tsc --noEmit",
-  "preview": "vite preview --port 5173",
-  "start": "node .output/server/index.mjs",
-  "typecheck": "tsc --noEmit",
-  "lint": "biome check src"
-}
-```
-
-### Add ECharts + TanStack Query + better-auth client
+The CLI scaffolded the React/Vite bits. We add what the rest of this file
+uses:
 
 ```sh
 pnpm --filter @ctrluhr/web add echarts echarts-for-react \
   @tanstack/react-query @tanstack/react-query-devtools better-auth
 ```
 
-Re-run `pnpm install` from root if you edited `package.json` by hand.
+Re-run `pnpm install` from the root if you edited `package.json` by hand.
 
-### Initial `src/routes/__root.tsx`
+`echarts-for-react` is a thin React wrapper. You can drop it later and use
+`echarts.init()` directly from a `useEffect` (which is what we do in §6
+anyway). Pick whichever you prefer — both are documented.
 
-```tsx
-import { Outlet, createRootRoute } from '@tanstack/react-router';
-import { TanStackRouterDevtools } from '@tanstack/react-router-devtools';
+## 2. Auth client + API helper
 
-export const Route = createRootRoute({
-  component: () => (
-    <div>
-      <Outlet />
-      <TanStackRouterDevtools />
-    </div>
-  ),
-});
-```
+better-auth exposes a typed client for browsers. We use it instead of raw
+fetch — it handles cross-origin CORS and cookie management for us.
 
-### `src/routes/index.tsx`
+### 2.1 Read these in order
 
-```tsx
-import { createRoute } from '@tanstack/react-router';
-import { Route as RootRoute } from './__root';
+1. **better-auth — Create Client Instance (React tab)** —
+   https://www.better-auth.com/docs/installation#create-client-instance
+   `createAuthClient` from `better-auth/react`. Pass the `baseURL` of
+   your API (`http://localhost:3000` in dev).
+2. **better-auth — Magic Link plugin client** —
+   https://www.better-auth.com/docs/plugins/magic-link#add-the-client-plugin
+   The `magicLinkClient` plugin is what gives you the `auth.signIn.magicLink`
+   method we use in §4.
+3. **`fetch` with `credentials: 'include'`** — https://developer.mozilla.org/en-US/docs/Web/API/fetch#credentials
+   For the raw fetch helper in `lib/api.ts`. We need this for our non-auth
+   calls to `:3000` (devices, analytics) because the session cookie is on
+   that origin.
 
-export const Route = IndexRoute({
-  getParentRoute: () => RootRoute,
-  component: () => <div>Hello ctrluhr</div>,
-});
-```
+### 2.2 Write `apps/web/src/lib/auth.ts`
 
-Wait, TanStack Router file-based routes don't need all this. Use the CLI
-or see the file-based routing guide:
-https://tanstack.com/router/latest/docs/framework/react/guide/file-based-routing
+A single import + `createAuthClient` call. Then export the pieces you'll
+use (`useSession`, `signIn`). Per the better-auth docs, the magic link
+client plugin is added separately in the client config — we do this
+because we know we'll use `auth.signIn.magicLink` in §4.
 
-## 2. Auth client + context
-
-better-auth exposes a typed client for browsers. We use it here, not the
-raw fetch.
-
-### `apps/web/src/lib/auth.ts`
+#### Reference — what the end file should look like
 
 ```ts
+// apps/web/src/lib/auth.ts — REFERENCE ONLY
+// Write by following the better-auth React client docs, then compare.
+
 import { createAuthClient } from 'better-auth/react';
+import { magicLinkClient } from 'better-auth/client/plugins';
 
 export const auth = createAuthClient({
   baseURL: 'http://localhost:3000',
+  plugins: [magicLinkClient()],
 });
+
 export const { signIn, signOut, useSession } = auth;
 ```
 
-### `apps/web/src/lib/api.ts`
+### 2.3 Write `apps/web/src/lib/api.ts`
+
+A thin wrapper that adds `credentials: 'include'` (so the session cookie
+rides along) and JSON content-type. The MDN doc above covers the why.
+
+In phase 5 you'll swap this for a generated Hono RPC client
+(`hc<...>(...)`) that gives you end-to-end types. For now hand-typed
+keeps things explicit and lets you read every byte of the call.
+
+#### Reference — what the end file should look like
 
 ```ts
+// apps/web/src/lib/api.ts — REFERENCE ONLY
+
 import { auth } from './auth';
 
 async function req(path: string, init: RequestInit = {}) {
@@ -167,17 +174,43 @@ export async function createDevice(input: { name: string; os: string }) {
 }
 ```
 
-In phase 5 you'll swap this for a generated Hono RPC client (`hc<...>(...)`)
-that gives you end-to-end types. For now hand-typed keeps things explicit.
+## 3. Router setup (root route, auth context, providers)
 
-## 3. Auth gate on the root route
+Three files wire TanStack Router + TanStack Query together: `__root.tsx`
+declares the root component, `router.ts` instantiates the router with
+the QueryClient context, and `main.tsx` mounts everything.
 
-We want: if route is in `_auth` group and no session → redirect to `/login`.
-Use TanStack Router's `beforeLoad` for this.
+### 3.1 Read these in order
 
-### `apps/web/src/routes/__root.tsx`
+1. **TanStack Router — root route** —
+   https://tanstack.com/router/latest/docs/framework/react/api/route#root-route
+   The `createRootRouteWithContext` generic is what lets you type the
+   `queryClient` injected by the router. Read the "Root Route" section.
+2. **TanStack Router — context inheritance** —
+   https://tanstack.com/router/latest/docs/framework/react/guide/context
+   Specifically how `RouterContext` declared on the root route is
+   available in every child route's `beforeLoad` and `loader`.
+3. **TanStack Query — `QueryClientProvider`** —
+   https://tanstack.com/query/latest/docs/framework/react/quick-start
+   The provider wires the client to React. Keep it as high in the tree
+   as `RouterProvider` — we want them to be siblings so the router
+   context can hand the same client to route loaders later if needed.
+
+### 3.2 Write the three files
+
+Each is small. By the time you've read the three docs above, the
+`__root.tsx` component (a `<div>` with `<Outlet />` and the devtools),
+`router.ts` (a `createRouter` with the route tree and context), and
+`main.tsx` (`createRoot` + `<QueryClientProvider>` + `<RouterProvider>`)
+should be obvious from the docs.
+
+#### Reference — what the end files should look like
+
+`apps/web/src/routes/__root.tsx`:
 
 ```tsx
+// apps/web/src/routes/__root.tsx — REFERENCE ONLY
+
 import { Outlet, createRootRouteWithContext } from '@tanstack/react-router';
 import { TanStackRouterDevtools } from '@tanstack/react-router-devtools';
 import type { QueryClient } from '@tanstack/react-query';
@@ -196,13 +229,13 @@ export const Route = createRootRouteWithContext<RouterContext>()({
 });
 ```
 
-The queryClient gets injected via the `router.ts` setup — see below.
-
-### `apps/web/src/router.ts`
+`apps/web/src/router.ts`:
 
 ```ts
+// apps/web/src/router.ts — REFERENCE ONLY
+
 import { createRouter } from '@tanstack/react-router';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { QueryClient } from '@tanstack/react-query';
 import { routeTree } from './routeTree.gen';
 import type { RouterContext } from './routes/__root';
 
@@ -217,9 +250,11 @@ export const router = createRouter({
 export type AppRouter = typeof router;
 ```
 
-### `apps/web/src/main.tsx`
+`apps/web/src/main.tsx`:
 
 ```tsx
+// apps/web/src/main.tsx — REFERENCE ONLY
+
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { RouterProvider } from '@tanstack/react-router';
@@ -236,28 +271,43 @@ root.render(
 );
 ```
 
-### `apps/web/index.html`
-
-```html
-<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>ctrluhr</title>
-  </head>
-  <body>
-    <div id="root"></div>
-    <script type="module" src="/src/main.tsx"></script>
-  </body>
-</html>
-```
-
 ## 4. Login route
 
-### `apps/web/src/routes/login.tsx`
+A form that calls `auth.signIn.magicLink({ email })`, then renders a
+"check your inbox" state. The actual click-to-verify happens on the API
+host (`:3000/auth/callback/...`); the API redirects to your web app's
+`callbackURL` after the session cookie is set.
+
+### 4.1 Read these in order
+
+1. **better-auth Magic Link — Sign In with Magic Link (Client tab)** —
+   https://www.better-auth.com/docs/plugins/magic-link#sign-in-with-magic-link
+   The `authClient.signIn.magicLink({ email, callbackURL })` shape.
+   The `callbackURL` is where the user lands after clicking the link
+   in their email.
+2. **TanStack Router — file-based route declaration** —
+   https://tanstack.com/router/latest/docs/framework/react/guide/file-based-routing
+   How `src/routes/login.tsx` becomes `/login` with no extra config.
+
+### 4.2 Write `apps/web/src/routes/login.tsx`
+
+A standard React form: state for `email`, state for "sent" vs "form",
+state for error. The `auth.signIn.magicLink` call returns `{ data, error }`
+— check the error branch.
+
+**Where the user lands after clicking the email link** is controlled by
+two things: the `callbackURL` you pass to `signIn.magicLink`, and the
+`BETTER_AUTH_URL` env var on the API. If the user lands on the wrong URL
+(404 or the wrong port), the issue is one of those two — re-read §3.3
+of `03-api-setup.md` and the better-auth Magic Link plugin docs.
+
+#### Reference — what the end file should look like
 
 ```tsx
+// apps/web/src/routes/login.tsx — REFERENCE ONLY
+// (the createRoute/getParentRoute call is what file-based routing generates
+//  for you; the component is what you write by hand.)
+
 import { useState } from 'react';
 import { createRoute } from '@tanstack/react-router';
 import { Route as RootRoute } from './__root';
@@ -277,7 +327,10 @@ function LoginPage() {
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     setErr(null);
-    const { error } = await auth.magicLink.sendMagicLink({ email });
+    const { error } = await auth.signIn.magicLink({
+      email,
+      callbackURL: '/dashboard',
+    });
     if (error) setErr(error.message ?? 'Unknown error');
     else setSent(true);
   }
@@ -314,45 +367,97 @@ function LoginPage() {
 }
 ```
 
-### Auth gate: redirect to `/login` if not authed
+## 5. Auth gate — `_auth` layout route
 
-For routes under `_auth/`, use `beforeLoad`:
+We use a **pathless layout route** to apply the "must be logged in" check
+once, to every route under `_auth/`. The check lives in `beforeLoad`,
+which runs before the route's component renders.
+
+### 5.1 Read these in order
+
+1. **TanStack Router — `beforeLoad` for auth gates** —
+   https://tanstack.com/router/latest/docs/framework/react/guide/authenticated-routes
+   The "Authenticated Routes" example is exactly our pattern. Read the
+   "Redirecting" subsection for the `throw redirect({ to: '/login', search: { redirect: ... } })`
+   shape.
+2. **TanStack Router — pathless route groups** —
+   https://tanstack.com/router/latest/docs/framework/react/guide/file-based-routing#pathless-route-groups
+   The `_auth.tsx` file (note the leading underscore) is a pathless
+   layout. URLs under `_auth/dashboard.tsx` become `/dashboard`, not
+   `/_auth/dashboard`.
+
+### 5.2 Write `apps/web/src/routes/_auth.tsx`
+
+The layout route. `id: '_auth'` is the internal identifier TanStack
+Router uses; the URL prefix is empty because the filename starts with `_`.
+
+`beforeLoad` checks the session via `auth.getSession()` (per the
+better-auth React client docs). If no session, throw a redirect to
+`/login` with the current location as the `redirect` search param —
+the login route can pick that up and send the user back after they
+authenticate.
+
+#### Reference — what the end file should look like
 
 ```tsx
-// inside any _auth route definition:
-beforeLoad: async ({ location }) => {
-  const session = await auth.getSession();
-  if (!session) {
-    throw redirect({ to: '/login', search: { redirect: location.href } });
-  }
-},
+// apps/web/src/routes/_auth.tsx — REFERENCE ONLY
+
+import { Outlet, createRoute, redirect } from '@tanstack/react-router';
+import { auth } from '../lib/auth';
+import { Route as RootRoute } from './__root';
+
+export const Route = createRoute({
+  getParentRoute: () => RootRoute,
+  id: '_auth',
+  beforeLoad: async ({ location }) => {
+    const { data: session } = await auth.getSession();
+    if (!session) {
+      throw redirect({ to: '/login', search: { redirect: location.href } });
+    }
+  },
+  component: () => <Outlet />,
+});
 ```
 
-You can do this once in a `_auth.tsx` layout route so it applies to all
-children. Check TanStack Router's "Layout Routes" doc.
+`_auth/dashboard.tsx` and `_auth/devices.tsx` then declare
+`getParentRoute: () => AuthRoute` (where `AuthRoute` is the import of the
+above) so they live under the auth gate. File-based routing handles the
+file-tree-to-URL mapping; the only thing the file declares is the
+`getParentRoute` parent.
 
-### Magic link callback
+## 6. Devices route
 
-better-auth's magic-link expects the user to hit `/auth/verify?token=...` on
-the API. When they click the link in the email, it goes directly to the API
-host. After successful verification, better-auth replies with a redirect to
-`BETTER_AUTH_BASE_URL` by default, OR according to the `callbackURL` you
-passed to `sendMagicLink`.
+A list + create form. Mostly our own UI; the only library surface is
+TanStack Query's `useQuery` / `useMutation` / `useQueryClient` (for
+invalidation) and our `lib/api.ts` helper.
 
-For a React-first flow, call `auth.magicLink.sendMagicLink({ email, callbackURL: '/dashboard' })`
-so better-auth redirects back to your web app after verifying. Check your
-better-auth version's exact API for `callbackURL`.
+### 6.1 Read these in order
 
-## 5. Devices route
+1. **TanStack Query — Queries + Mutations** —
+   https://tanstack.com/query/latest/docs/framework/react/guides/queries
+   and https://tanstack.com/query/latest/docs/framework/react/guides/mutations
+   The two hooks you'll use 90% of the time. The "Query Invalidation"
+   guide (linked from the Quick Start) covers `queryClient.invalidateQueries`
+   for the create-mutation-then-refresh-list pattern.
+2. **React 19 — `useActionState` (optional)** —
+   https://react.dev/reference/react/useActionState
+   If you want form-submit-as-action semantics instead of `onSubmit`,
+   read this. Phase 0 keeps it simple with `onSubmit` + `useState`.
 
-### `apps/web/src/routes/_auth/devices.tsx`
+### 6.2 Write `apps/web/src/routes/_auth/devices.tsx`
 
-A list + create form:
+The shape: `useQuery` for the list, `useMutation` for create, and
+`onSuccess` invalidates the query so the list refetches. The enrollment
+token returned by the API is shown in a copyable box.
+
+#### Reference — what the end file should look like
 
 ```tsx
+// apps/web/src/routes/_auth/devices.tsx — REFERENCE ONLY
+
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { listDevices, createDevice } from '../../../lib/api';
+import { listDevices, createDevice } from '../../lib/api';
 
 export default function DevicesPage() {
   const qc = useQueryClient();
@@ -414,16 +519,44 @@ export default function DevicesPage() {
 }
 ```
 
-## 6. Dashboard with ECharts
+## 7. Dashboard with ECharts
 
-### `apps/web/src/lib/charts/dayTimeline.tsx`
+The dashboard queries `getDay(today)` on a 15s interval, and renders an
+ECharts stacked bar of hours 0..23. The chart is a `useEffect` that
+calls `echarts.init(container)` on mount, `setOption({...})` on data
+change, and `dispose()` on unmount. Read the ECharts handbook entry for
+the import pattern; everything else is plain React.
+
+### 7.1 Read these in order
+
+1. **ECharts — Import (NPM Package)** — https://echarts.apache.org/handbook/en/basics/import
+   The `import * as echarts from 'echarts'` + `echarts.init(el)` +
+   `chart.setOption({...})` + `chart.dispose()` pattern. We use the
+   "full" import for phase 0; the tree-shakable import is a phase 5+
+   bundle-size optimization.
+2. **ECharts — Stacked Bar** —
+   https://echarts.apache.org/handbook/en/how-to/chart-types/bar/stacked-bar
+   The `series: [{ stack: 'total', ... }]` pattern that makes three bars
+   stack into one. The dashboard uses this for productive / neutral /
+   distracting.
+
+### 7.2 Write `apps/web/src/lib/charts/dayTimeline.tsx`
+
+A small wrapper component. It receives a 24-element array (one bucket
+per hour) and renders the ECharts stacked bar. The
+`useEffect` → `setOption` → `dispose` pattern is standard; copy it
+from the ECharts handbook.
+
+#### Reference — what the end file should look like
 
 ```tsx
+// apps/web/src/lib/charts/dayTimeline.tsx — REFERENCE ONLY
+
 import { useEffect, useRef } from 'react';
 import * as echarts from 'echarts';
 
 export interface DayTimelinePoint {
-  hour: number;       // 0..23
+  hour: number;        // 0..23
   productive: number;  // minutes
   neutral: number;
   distracting: number;
@@ -441,8 +574,8 @@ export function DayTimelineChart({ data }: { data: DayTimelinePoint[] }) {
       yAxis: { type: 'value', name: 'minutes' },
       series: [
         { name: 'Productive', type: 'bar', stack: 'total', data: data.map((d) => d.productive), itemStyle: { color: '#22c55e' } },
-        { name: 'Neutral', type: 'bar', stack: 'total', data: data.map((d) => d.neutral), itemStyle: { color: '#6b7280' } },
-        { name: 'Distracting', type: 'bar', stack: 'total', data: data.map((d) => d.distracting), itemStyle: { color: '#ef4444' } },
+        { name: 'Neutral',    type: 'bar', stack: 'total', data: data.map((d) => d.neutral),    itemStyle: { color: '#6b7280' } },
+        { name: 'Distracting',type: 'bar', stack: 'total', data: data.map((d) => d.distracting),itemStyle: { color: '#ef4444' } },
       ],
     });
     return () => chart.dispose();
@@ -451,15 +584,27 @@ export function DayTimelineChart({ data }: { data: DayTimelinePoint[] }) {
 }
 ```
 
-ECharts via `echarts/core` keeps the bundle smaller than full `echarts`. For
-phase 0 the full import is fine; optimize later.
+> ECharts via `echarts/core` keeps the bundle smaller than the full
+> `echarts` import. For phase 0 the full import is fine; optimize
+> later.
 
-### `apps/web/src/routes/_auth/dashboard.tsx`
+### 7.3 Write `apps/web/src/routes/_auth/dashboard.tsx`
+
+A `useQuery` that polls `getDay(today)` every 15s, then transforms the
+buckets into the 24-element array the chart wants. **For phase 0, the
+API returns day totals, not hourly breakdown** — so we put all minutes
+into the "current hour" bucket. The chart still renders, and phase 1
+fixes the API to return hourly data (this is exactly what
+`07-future-phases.md` §Phase 1 documents).
+
+#### Reference — what the end file should look like
 
 ```tsx
+// apps/web/src/routes/_auth/dashboard.tsx — REFERENCE ONLY
+
 import { useQuery } from '@tanstack/react-query';
-import { getDay } from '../../../lib/api';
-import { DayTimelineChart, type DayTimelinePoint } from '../../../lib/charts/dayTimeline';
+import { getDay } from '../../lib/api';
+import { DayTimelineChart, type DayTimelinePoint } from '../../lib/charts/dayTimeline';
 
 export default function DashboardPage() {
   const today = new Date().toISOString().slice(0, 10);
@@ -469,10 +614,8 @@ export default function DashboardPage() {
     refetchInterval: 15_000, // auto-refresh every 15s while daemon emits
   });
 
-  // Transform buckets → hourly array. /analytics/day returns totals for now,
-  // so all minutes go into the "current hour" bucket. Phase 1 will make the
-  // API return hourly breakdown; for phase 0 we fake the hourly array so the
-  // chart still renders something.
+  // Initialize 24 zero-buckets. Phase 0 puts everything into the current
+  // hour; phase 1 makes the API return hourly and we drop the fake.
   const chartData: DayTimelinePoint[] = Array.from({ length: 24 }, (_, h) => ({
     hour: h,
     productive: 0,
@@ -497,7 +640,7 @@ export default function DashboardPage() {
       <div className="flex justify-between items-end">
         <h1 className="text-xl">Today</h1>
         <p className="text-zinc-500">{Math.round(totalSeconds / 60)} min tracked</p>
-      </dat>
+      </div>
       {isLoading && <p>Loading…</p>}
       <DayTimelineChart data={chartData} />
     </div>
@@ -505,38 +648,7 @@ export default function DashboardPage() {
 }
 ```
 
-Note: there's a `</dat>` typo above — replace with `</div>`. Treat it as a
-real bug to make sure you read the code you paste. (Yes, intentional —
-typing rushed fixes hurts learning. Fix it.)
-
-### Auth-protected layout
-
-Create `apps/web/src/routes/_auth.tsx` (a pathless layout route in TanStack
-Router file-based routing):
-
-```tsx
-import { Outlet, createRoute, redirect } from '@tanstack/react-router';
-import { auth } from '../lib/auth';
-import { Route as RootRoute } from './__root';
-
-export const Route = createRoute({
-  getParentRoute: () => RootRoute,
-  id: '_auth',
-  beforeLoad: async ({ location }) => {
-    // better-auth returns null session when unauthenticated
-    const { data: session } = await auth.getSession();
-    if (!session) {
-      throw redirect({ to: '/login', search: { redirect: location.href } });
-    }
-  },
-  component: () => <Outlet />,
-});
-```
-
-Then `_auth/dashboard.tsx` and `_auth/devices.tsx` need
-`getParentRoute: () => Route` pointing at this layout, not `__root`.
-
-## 7. Verify
+## 8. Verify
 
 From `apps/web/`:
 
@@ -549,7 +661,7 @@ email → check inbox → click link → land on `/dashboard` (empty). Navigate 
 `/devices` → create a device → see token. Token won't be usable until the
 daemon exists (next file).
 
-## 8. Commit `[commit]`
+## 9. Commit `[commit]`
 
 ```sh
 git add -A
@@ -564,43 +676,44 @@ import fails, install them. For prod builds drop the devtools.
 
 ### `auth.getSession()` doesn't return session even after login
 better-auth's session cookie is set for the API domain (`:3000`), not the
-web domain (`:5173`). You need to either:
-1. Use a reverse proxy in dev (e.g. `vite` server proxying `/auth/*` to
-   `:3000`), OR
-2. Use better-auth's `crossSubdomainCookies` and a shared base domain
-   (only works with real domains), OR
-3. Do auth via the `better-auth/react` client which handles cross-origin CORS
-   for you.
+web domain (`:5173`). The `createAuthClient` from §2.2 sends
+`credentials: 'include'` on every call, so the browser attaches the
+cookie on cross-origin requests. If the cookie doesn't reach the API,
+check two things in order:
+1. The API's CORS config in `03-api-setup.md` §4 has
+   `credentials: true` (we set this).
+2. DevTools → Application → Cookies → `http://localhost:3000` shows the
+   `better-auth.session_token` cookie after a successful login.
 
-Option 3 is what we use (the `createAuthClient` call). Verify the cookie sent
-back is actually received in the browser — DevTools → Application → Cookies.
-If not, `cors` on Hono must include `credentials: true` (we did) AND the
-browser fetch must include `credentials: 'include'` (better-auth's client
-does this for you).
+If both are true and `getSession` still returns null, the better-auth
+docs have a CORS / cookies section under Integrations — read it.
 
 ### ECharts renders blank
-ECharts needs an explicit height. We set `style={{ height: 320 }}` on the
-container — that's the requirement. Don't use 100% height on the chart
-container unless the parent has a fixed height.
+ECharts needs an explicit height on its container. We set
+`style={{ height: 320 }}` on the container — that's the requirement.
+Don't use `100%` height on the chart container unless the parent has a
+fixed height.
 
 ### TanStack Start server functions vs loaders
-The way "server functions" work in TanStack Start: any function wrapped in
-`createServerFn` runs on the server, even if imported from a `.tsx` file on
-the client side. For phase 0 we don't need server functions — our API is a
-separate service. Use React Query from the browser; let the browser call the
-Hono API directly. TanStack Start "server functions" are for SSR data where
-the React and the server share a *single* app — not our architecture.
+For phase 0 we don't need server functions — our API is a separate
+service. Use React Query from the browser; let the browser call the
+Hono API directly. TanStack Start "server functions" are for SSR data
+where the React and the server share a *single* app — not our
+architecture. We may revisit this in phase 5 (Vercel deploy) but it's
+not on the phase 0 path.
 
 ### TanStack Router route generation
-File-based routing generates `routeTree.gen.ts` via its Vite plugin. If you
-see "Cannot find module './routeTree.gen'", run `pnpm dev` once — the plugin
-generates the file on first run. Commit it after regen.
+File-based routing generates `routeTree.gen.ts` via its Vite plugin. If
+you see "Cannot find module './routeTree.gen'", run `pnpm dev` once —
+the plugin generates the file on first run. Commit it after regen.
 
 ### `@ctrluhr/schema` or `@/*` imports don't resolve
-The CLI-generated `vite.config.ts` uses Vite's built-in `resolve.tsconfigPaths: true`
-(reads `tsconfig.json` `paths`), not the `vite-tsconfig-paths` plugin. So just
-make sure `apps/web/tsconfig.json` has the `paths` block from Step 1 and
-`vite.config.ts` has `resolve: { tsconfigPaths: true }` — no extra dep needed.
+The CLI-generated `vite.config.ts` uses Vite's built-in
+`resolve: { tsconfigPaths: true }` (reads `tsconfig.json` `paths`), not
+the `vite-tsconfig-paths` plugin. So just make sure
+`apps/web/tsconfig.json` has the `paths` block from §1.2 and
+`vite.config.ts` has `resolve: { tsconfigPaths: true }` — no extra dep
+needed.
 
 ## Done criteria
 
