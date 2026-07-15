@@ -773,7 +773,7 @@ needed.
 
 ## Done criteria
 
-- [ ] TanStack Start dev server boots on `:5173`
+- [X] TanStack Start dev server boots on `:5173`
 - [ ] `/login` form sends magic link email (visible in Resend logs)
 - [ ] Clicking link sets session cookie; browser lands on `/dashboard`
 - [ ] `/dashboard` shows ECharts stacked bar, auto-refreshing every 15s
