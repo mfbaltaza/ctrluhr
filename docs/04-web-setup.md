@@ -108,35 +108,41 @@ fetch — it handles cross-origin CORS and cookie management for us.
    your API (`http://localhost:3000` in dev).
 2. **better-auth — Magic Link plugin client** —
    https://www.better-auth.com/docs/plugins/magic-link#add-the-client-plugin
-   The `magicLinkClient` plugin is what gives you the `auth.signIn.magicLink`
+   The `magicLinkClient` plugin is what gives you the `signIn.magicLink`
    method we use in §4.
-3. **`fetch` with `credentials: 'include'`** — https://developer.mozilla.org/en-US/docs/Web/API/fetch#credentials
+3. **`fetch` with `credentials: 'include'`** — https://developer.mozilla.org/en-US/docs/Web/API/RequestInit#credentials
    For the raw fetch helper in `lib/api.ts`. We need this for our non-auth
    calls to `:3000` (devices, analytics) because the session cookie is on
    that origin.
 
-### 2.2 Write `apps/web/src/lib/auth.ts`
+### 2.2 Write `apps/web/src/lib/auth-client.ts`
 
-A single import + `createAuthClient` call. Then export the pieces you'll
-use (`useSession`, `signIn`). Per the better-auth docs, the magic link
-client plugin is added separately in the client config — we do this
-because we know we'll use `auth.signIn.magicLink` in §4.
+A single import + `createAuthClient` call. We export two things:
+
+1. The full `auth` client — used where hooks don't apply (e.g. `auth.getSession()` in `_auth.tsx`'s `beforeLoad`).
+2. Destructured `signIn`, `signUp`, `useSession` — the pieces the
+   login route and React components actually use.
+
+Per the better-auth docs, the magic link client plugin is added
+separately in the client config — we do this because we know we'll use
+`signIn.magicLink` in §4.
 
 #### Reference — what the end file should look like
 
 ```ts
-// apps/web/src/lib/auth.ts — REFERENCE ONLY
+// apps/web/src/lib/auth-client.ts — REFERENCE ONLY
 // Write by following the better-auth React client docs, then compare.
 
-import { createAuthClient } from 'better-auth/react';
 import { magicLinkClient } from 'better-auth/client/plugins';
+import { createAuthClient } from 'better-auth/react';
 
 export const auth = createAuthClient({
-  baseURL: 'http://localhost:3000',
   plugins: [magicLinkClient()],
+  /** The base URL of the server (optional if you're using the same domain) */
+  baseURL: 'http://localhost:3000',
 });
 
-export const { signIn, signOut, useSession } = auth;
+export const { signIn, signUp, useSession } = auth;
 ```
 
 ### 2.3 Write `apps/web/src/lib/api.ts`
@@ -152,8 +158,6 @@ keeps things explicit and lets you read every byte of the call.
 
 ```ts
 // apps/web/src/lib/api.ts — REFERENCE ONLY
-
-import { auth } from './auth';
 
 async function req(path: string, init: RequestInit = {}) {
   const res = await fetch(`http://localhost:3000${path}`, {
@@ -275,7 +279,7 @@ root.render(
 
 ## 4. Login route
 
-A form that calls `auth.signIn.magicLink({ email })`, then renders a
+A form that calls `signIn.magicLink({ email })`, then renders a
 "check your inbox" state. The actual click-to-verify happens on the API
 host (`:3000/auth/callback/...`); the API redirects to your web app's
 `callbackURL` after the session cookie is set.
@@ -294,7 +298,7 @@ host (`:3000/auth/callback/...`); the API redirects to your web app's
 ### 4.2 Write `apps/web/src/routes/login.tsx`
 
 A standard React form: state for `email`, state for "sent" vs "form",
-state for error. The `auth.signIn.magicLink` call returns `{ data, error }`
+state for error. The `signIn.magicLink` call returns `{ data, error }`
 — check the error branch.
 
 **Where the user lands after clicking the email link** is controlled by
@@ -313,7 +317,7 @@ of `03-api-setup.md` and the better-auth Magic Link plugin docs.
 import { useState } from 'react';
 import { createRoute } from '@tanstack/react-router';
 import { Route as RootRoute } from './__root';
-import { auth } from '../lib/auth';
+import { signIn } from '../lib/auth-client';
 
 export const Route = createRoute({
   getParentRoute: () => RootRoute,
@@ -329,7 +333,7 @@ function LoginPage() {
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     setErr(null);
-    const { error } = await auth.signIn.magicLink({
+    const { error } = await signIn.magicLink({
       email,
       callbackURL: '/dashboard',
     });
@@ -408,7 +412,7 @@ authenticate.
 // apps/web/src/routes/_auth.tsx — REFERENCE ONLY
 
 import { Outlet, createRoute, redirect } from '@tanstack/react-router';
-import { auth } from '../lib/auth';
+import { auth } from '../lib/auth-client';
 import { Route as RootRoute } from './__root';
 
 export const Route = createRoute({
