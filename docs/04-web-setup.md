@@ -778,9 +778,9 @@ needed.
 - [ ] Clicking link sets session cookie; browser lands on `/dashboard`
 - [ ] `/dashboard` shows ECharts stacked bar, auto-refreshing every 15s
 - [ ] `/devices` lists devices, allows creating one (returns enrollment token)
-- [ ] Auth gate redirects unauthed users from `_auth` routes to `/login`
-- [ ] `pnpm typecheck` passes
-- [ ] One commit: "feat(web): tanstack start app, magic-link auth, dashboard + devices"
+- [X] Auth gate redirects unauthed users from `_auth` routes to `/login`
+- [X] `pnpm typecheck` passes
+- [X] One commit: "feat(web): tanstack start app, magic-link auth, dashboard + devices"
 
 Next file: `05-daemon-setup.md` — Go daemon with stub tracker, uplink
 client, tray, enrollment CLI.
