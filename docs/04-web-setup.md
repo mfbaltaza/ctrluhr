@@ -188,12 +188,12 @@ the QueryClient context, and `main.tsx` mounts everything.
 
 ### 3.1 Read these in order
 
-1. **TanStack Router — root route** —
-   https://tanstack.com/router/latest/docs/framework/react/api/route#root-route
+1. **TanStack Router — `createRootRouteWithContext`** —
+   https://tanstack.com/router/latest/docs/framework/react/api/router/createRootRouteWithContextFunction
    The `createRootRouteWithContext` generic is what lets you type the
    `queryClient` injected by the router. Read the "Root Route" section.
-2. **TanStack Router — context inheritance** —
-   https://tanstack.com/router/latest/docs/framework/react/guide/context
+2. **TanStack Router — router context** —
+   https://tanstack.com/router/latest/docs/framework/react/guide/router-context
    Specifically how `RouterContext` declared on the root route is
    available in every child route's `beforeLoad` and `loader`.
 3. **TanStack Query — `QueryClientProvider`** —
