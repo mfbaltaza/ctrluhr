@@ -1,3 +1,8 @@
+-- pgvector provides the vector(1536) type used by activity_events.raw_embedding
+-- and categories.embedding. Neon enables it already; this is a no-op there and
+-- a guard for local/fresh databases.
+CREATE EXTENSION IF NOT EXISTS vector;
+--> statement-breakpoint
 CREATE TABLE "activity_events" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
 	"user_id" uuid NOT NULL,
@@ -18,15 +23,17 @@ CREATE TABLE "categories" (
 	"color" text DEFAULT '#6b7280' NOT NULL,
 	"is_productive" integer DEFAULT 0 NOT NULL,
 	"embedding" vector(1536),
-	"created_at" timestamp with time zone DEFAULT now() NOT NULL
+	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
+	CONSTRAINT "categories_is_productive_domain" CHECK ("is_productive" IN (-1, 0, 1))
 );
 --> statement-breakpoint
 CREATE TABLE "category_rules" (
 	"category_id" uuid,
-	"pattern_type" text NOT NULL,
+	"pattern_type" text,
 	"pattern" text,
 	"priority" integer DEFAULT 0,
-	CONSTRAINT "category_rules_pkey" PRIMARY KEY("category_id","pattern")
+	CONSTRAINT "category_rules_pkey" PRIMARY KEY("category_id","pattern_type","pattern"),
+	CONSTRAINT "category_rules_pattern_type_domain" CHECK ("pattern_type" IN ('app_name', 'title_regex'))
 );
 --> statement-breakpoint
 CREATE TABLE "devices" (
@@ -64,19 +71,20 @@ CREATE TABLE "sessions" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
 	"user_id" uuid NOT NULL,
 	"token" text NOT NULL UNIQUE,
-	"expires_at" timestamp NOT NULL,
+	"expires_at" timestamp with time zone NOT NULL,
 	"ip_address" text,
 	"user_agent" text,
-	"created_at" timestamp DEFAULT now() NOT NULL
+	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
+	"updated_at" timestamp with time zone DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
 CREATE TABLE "users" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
 	"email" text NOT NULL UNIQUE,
-	"email_verified" timestamp DEFAULT now(),
+	"email_verified" boolean DEFAULT false NOT NULL,
 	"name" text,
-	"created_at" timestamp DEFAULT now() NOT NULL,
-	"updated_at" timestamp DEFAULT now() NOT NULL
+	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
+	"updated_at" timestamp with time zone DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
 CREATE TABLE "verifications" (
@@ -84,8 +92,8 @@ CREATE TABLE "verifications" (
 	"user_id" uuid NOT NULL,
 	"token" text NOT NULL,
 	"type" text NOT NULL,
-	"expires_at" timestamp NOT NULL,
-	"created_at" timestamp DEFAULT now() NOT NULL
+	"expires_at" timestamp with time zone NOT NULL,
+	"created_at" timestamp with time zone DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
 CREATE INDEX "activity_events_user_started_idx" ON "activity_events" ("user_id","started_at");--> statement-breakpoint

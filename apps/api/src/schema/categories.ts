@@ -1,4 +1,6 @@
+import { sql } from 'drizzle-orm';
 import {
+  check,
   index,
   integer,
   pgTable,
@@ -28,5 +30,6 @@ export const categories = pgTable(
   (t) => [
     uniqueIndex('categories_user_name_uniq').on(t.userId, t.name),
     index('categories_user_id_idx').on(t.userId),
+    check('categories_is_productive_domain', sql`${t.isProductive} IN (-1, 0, 1)`),
   ],
 );

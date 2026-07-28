@@ -8,6 +8,6 @@ export const vouchers = pgTable('verifications', {
     .references(() => users.id, { onDelete: 'cascade' }),
   token: text('token').notNull(),
   type: text('type').notNull(), // 'magic_link' | 'device_enroll' | ...
-  expiresAt: timestamp('expires_at').notNull(),
-  createdAt: timestamp('created_at').defaultNow().notNull(),
+  expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 });

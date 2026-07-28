@@ -1,7 +1,7 @@
 {
   "version": "8",
   "dialect": "postgres",
-  "id": "10e10769-ae48-4239-a912-ee9d11f78c15",
+  "id": "58e03f30-ca93-4311-90dc-b2500d1c3258",
   "prevIds": [
     "00000000-0000-0000-0000-000000000000"
   ],
@@ -659,7 +659,7 @@
       "table": "sessions"
     },
     {
-      "type": "timestamp",
+      "type": "timestamp with time zone",
       "typeSchema": null,
       "notNull": true,
       "dimensions": 0,
@@ -698,7 +698,7 @@
       "table": "sessions"
     },
     {
-      "type": "timestamp",
+      "type": "timestamp with time zone",
       "typeSchema": null,
       "notNull": true,
       "dimensions": 0,
@@ -706,6 +706,19 @@
       "generated": null,
       "identity": null,
       "name": "created_at",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "sessions"
+    },
+    {
+      "type": "timestamp with time zone",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": "now()",
+      "generated": null,
+      "identity": null,
+      "name": "updated_at",
       "entityType": "columns",
       "schema": "public",
       "table": "sessions"
@@ -737,11 +750,11 @@
       "table": "users"
     },
     {
-      "type": "timestamp",
+      "type": "boolean",
       "typeSchema": null,
-      "notNull": false,
+      "notNull": true,
       "dimensions": 0,
-      "default": "now()",
+      "default": "false",
       "generated": null,
       "identity": null,
       "name": "email_verified",
@@ -763,7 +776,7 @@
       "table": "users"
     },
     {
-      "type": "timestamp",
+      "type": "timestamp with time zone",
       "typeSchema": null,
       "notNull": true,
       "dimensions": 0,
@@ -776,7 +789,7 @@
       "table": "users"
     },
     {
-      "type": "timestamp",
+      "type": "timestamp with time zone",
       "typeSchema": null,
       "notNull": true,
       "dimensions": 0,
@@ -841,7 +854,7 @@
       "table": "verifications"
     },
     {
-      "type": "timestamp",
+      "type": "timestamp with time zone",
       "typeSchema": null,
       "notNull": true,
       "dimensions": 0,
@@ -854,7 +867,7 @@
       "table": "verifications"
     },
     {
-      "type": "timestamp",
+      "type": "timestamp with time zone",
       "typeSchema": null,
       "notNull": true,
       "dimensions": 0,
@@ -1255,6 +1268,7 @@
     {
       "columns": [
         "category_id",
+        "pattern_type",
         "pattern"
       ],
       "nameExplicit": false,
@@ -1364,6 +1378,20 @@
       "schema": "public",
       "table": "users",
       "entityType": "uniques"
+    },
+    {
+      "value": "\"is_productive\" IN (-1, 0, 1)",
+      "name": "categories_is_productive_domain",
+      "entityType": "checks",
+      "schema": "public",
+      "table": "categories"
+    },
+    {
+      "value": "\"pattern_type\" IN ('app_name', 'title_regex')",
+      "name": "category_rules_pattern_type_domain",
+      "entityType": "checks",
+      "schema": "public",
+      "table": "category_rules"
     }
   ],
   "renames": []
