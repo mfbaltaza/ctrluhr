@@ -108,3 +108,7 @@ You don't need Fly.io, Vercel, or Stripe accounts until phase 5. Everything runs
 > You log into a React app via magic link, create a device, enroll a Go daemon
 > with that device's token, and watch synthetic events appear on an ECharts
 > timeline — all wired by you, no black boxes.
+
+```bash
+pnpm exec biome check .
+```

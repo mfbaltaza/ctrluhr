@@ -2,16 +2,15 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "outDir": "./dist",
-    "strict": true,
+    "rootDir": "./",
     "types": ["bun"],
     "jsx": "react-jsx",
     "jsxImportSource": "hono/jsx",
     "paths": {
       "@ctrluhr/schema": ["../../packages/schema/src/index.ts"],
       "@ctrluhr/schema/*": ["../../packages/schema/src/*"]
-    },
-    "baseUrl": "."
+    }
   },
-  "include": ["src/**/*", "migrations/**/*.ts"],
+  "include": ["src/**/*", "migrations/**/*.ts", "drizzle.config.ts"],
   "exclude": ["node_modules", "dist"]
 }
