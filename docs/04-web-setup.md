@@ -182,9 +182,10 @@ export async function createDevice(input: { name: string; os: string }) {
 
 ## 3. Router setup (root route, auth context, providers)
 
-Three files wire TanStack Router + TanStack Query together: `__root.tsx`
-declares the root component, `router.ts` instantiates the router with
-the QueryClient context, and `main.tsx` mounts everything.
+Two files wire TanStack Router + TanStack Query together, plus a shared
+singleton: `__root.tsx` declares the root route with a typed context,
+`router.tsx` passes the QueryClient via that context, and
+`query-client.ts` holds the singleton instance to avoid circular deps.
 
 ### 3.1 Read these in order
 
@@ -198,84 +199,135 @@ the QueryClient context, and `main.tsx` mounts everything.
    available in every child route's `beforeLoad` and `loader`.
 3. **TanStack Query — `QueryClientProvider`** —
    https://tanstack.com/query/latest/docs/framework/react/quick-start
-   The provider wires the client to React. Keep it as high in the tree
-   as `RouterProvider` — we want them to be siblings so the router
-   context can hand the same client to route loaders later if needed.
+   The provider wires the client to React. In our TanStack Start SSR
+   scaffold there is no `main.tsx` — the provider goes in the root
+   route's `shellComponent` instead.
 
-### 3.2 Write the three files
+### 3.2 Write the files
 
-Each is small. By the time you've read the three docs above, the
-`__root.tsx` component (a `<div>` with `<Outlet />` and the devtools),
-`router.ts` (a `createRouter` with the route tree and context), and
-`main.tsx` (`createRoot` + `<QueryClientProvider>` + `<RouterProvider>`)
-should be obvious from the docs.
+The CLI scaffold already created `__root.tsx` and `router.tsx`. We modify
+both and add one helper.
 
-#### Reference — what the end files should look like
+#### `apps/web/src/lib/query-client.ts` — shared singleton
 
-`apps/web/src/routes/__root.tsx`:
+A separate module avoids a circular import: `router.tsx` needs the client
+for `context`, and `__root.tsx` needs the type and the import for
+`<QueryClientProvider>`. A third module breaks the loop.
+
+```ts
+// apps/web/src/lib/query-client.ts
+
+import { QueryClient } from '@tanstack/react-query';
+
+export const queryClient = new QueryClient();
+```
+
+#### `apps/web/src/routes/__root.tsx` — typed context + provider
+
+Keep the existing SSR shell (`RootDocument`, `head()`, `Scripts`,
+`shellComponent`). Two changes:
+
+1. Replace `createRootRoute` with `createRootRouteWithContext<RouterContext>()`
+   and export the `RouterContext` interface.
+2. Import `<QueryClientProvider>` and wrap `{children}` inside
+   `RootDocument` — this makes TanStack Query available on every page.
+
+Reference — the end state:
 
 ```tsx
 // apps/web/src/routes/__root.tsx — REFERENCE ONLY
 
-import { Outlet, createRootRouteWithContext } from '@tanstack/react-router';
-import { TanStackRouterDevtools } from '@tanstack/react-router-devtools';
+import { TanStackDevtools } from '@tanstack/react-devtools';
+import {
+  createRootRouteWithContext,
+  HeadContent,
+  Scripts,
+} from '@tanstack/react-router';
+import { QueryClientProvider } from '@tanstack/react-query';
+import { TanStackRouterDevtoolsPanel } from '@tanstack/react-router-devtools';
 import type { QueryClient } from '@tanstack/react-query';
+
+import { queryClient } from '../lib/query-client';
+import appCss from '../styles.css?url';
 
 export interface RouterContext {
   queryClient: QueryClient;
 }
 
 export const Route = createRootRouteWithContext<RouterContext>()({
-  component: () => (
-    <div className="min-h-screen bg-zinc-950 text-zinc-100">
-      <Outlet />
-      {import.meta.env.DEV && <TanStackRouterDevtools />}
-    </div>
-  ),
+  head: () => ({
+    meta: [
+      { charSet: 'utf-8' },
+      { name: 'viewport', content: 'width=device-width, initial-scale=1' },
+      { title: 'ctrluhr' },
+    ],
+    links: [{ rel: 'stylesheet', href: appCss }],
+  }),
+  shellComponent: RootDocument,
 });
+
+function RootDocument({ children }: { children: React.ReactNode }) {
+  return (
+    <html lang="en">
+      <head>
+        <HeadContent />
+      </head>
+      <body>
+        <QueryClientProvider client={queryClient}>
+          {children}
+        </QueryClientProvider>
+        <TanStackDevtools
+          config={{ position: 'bottom-right' }}
+          plugins={[
+            {
+              name: 'Tanstack Router',
+              render: <TanStackRouterDevtoolsPanel />,
+            },
+          ]}
+        />
+        <Scripts />
+      </body>
+    </html>
+  );
+}
 ```
 
-`apps/web/src/router.ts`:
+#### `apps/web/src/router.tsx` — pass queryClient in context
+
+Import the shared singleton and add `context: { queryClient }` to the
+router options. The `getRouter()` export stays — that's what TanStack
+Start SSR calls internally.
 
 ```ts
-// apps/web/src/router.ts — REFERENCE ONLY
+// apps/web/src/router.tsx — REFERENCE ONLY
 
-import { createRouter } from '@tanstack/react-router';
-import { QueryClient } from '@tanstack/react-query';
+import { createRouter as createTanStackRouter } from '@tanstack/react-router';
 import { routeTree } from './routeTree.gen';
-import type { RouterContext } from './routes/__root';
+import { queryClient } from './lib/query-client';
 
-const queryClient = new QueryClient();
+export function getRouter() {
+  const router = createTanStackRouter({
+    routeTree,
+    context: { queryClient },
+    scrollRestoration: true,
+    defaultPreload: 'intent',
+    defaultPreloadStaleTime: 0,
+  });
 
-export const router = createRouter({
-  routeTree,
-  context: { queryClient },
-  defaultPreload: 'intent',
-});
+  return router;
+}
 
-export type AppRouter = typeof router;
+declare module '@tanstack/react-router' {
+  interface Register {
+    router: ReturnType<typeof getRouter>;
+  }
+}
 ```
 
-`apps/web/src/main.tsx`:
-
-```tsx
-// apps/web/src/main.tsx — REFERENCE ONLY
-
-import React from 'react';
-import ReactDOM from 'react-dom/client';
-import { RouterProvider } from '@tanstack/react-router';
-import { QueryClientProvider } from '@tanstack/react-query';
-import { router } from './router';
-
-const root = ReactDOM.createRoot(document.getElementById('root')!);
-root.render(
-  <React.StrictMode>
-    <QueryClientProvider client={router.context.queryClient}>
-      <RouterProvider router={router} />
-    </QueryClientProvider>
-  </React.StrictMode>,
-);
-```
+> **Why no `main.tsx`?** TanStack Start (SSR) manages client and server
+> entry points via its `tanstackStart()` Vite plugin. There is no manual
+> `ReactDOM.createRoot()` call — the framework handles it. The
+> `<QueryClientProvider>` lives in the `shellComponent` above instead.
 
 ## 4. Login route
 
@@ -311,19 +363,12 @@ of `03-api-setup.md` and the better-auth Magic Link plugin docs.
 
 ```tsx
 // apps/web/src/routes/login.tsx — REFERENCE ONLY
-// (the createRoute/getParentRoute call is what file-based routing generates
-//  for you; the component is what you write by hand.)
 
 import { useState } from 'react';
-import { createRoute } from '@tanstack/react-router';
-import { Route as RootRoute } from './__root';
+import { createFileRoute } from '@tanstack/react-router';
 import { signIn } from '../lib/auth-client';
 
-export const Route = createRoute({
-  getParentRoute: () => RootRoute,
-  path: '/login',
-  component: LoginPage,
-});
+export const Route = createFileRoute('/login')({ component: LoginPage });
 
 function LoginPage() {
   const [email, setEmail] = useState('');
@@ -397,8 +442,8 @@ which runs before the route's component renders.
 
 ### 5.2 Write `apps/web/src/routes/_auth.tsx`
 
-The layout route. `id: '_auth'` is the internal identifier TanStack
-Router uses; the URL prefix is empty because the filename starts with `_`.
+The layout route. The URL prefix is empty because the filename starts with
+`_` — the `_auth` group is inferred from the file path by the Vite plugin.
 
 `beforeLoad` checks the session via `auth.getSession()` (per the
 better-auth React client docs). If no session, throw a redirect to
@@ -411,13 +456,10 @@ authenticate.
 ```tsx
 // apps/web/src/routes/_auth.tsx — REFERENCE ONLY
 
-import { Outlet, createRoute, redirect } from '@tanstack/react-router';
+import { Outlet, createFileRoute, redirect } from '@tanstack/react-router';
 import { auth } from '../lib/auth-client';
-import { Route as RootRoute } from './__root';
 
-export const Route = createRoute({
-  getParentRoute: () => RootRoute,
-  id: '_auth',
+export const Route = createFileRoute('/_auth')({
   beforeLoad: async ({ location }) => {
     const { data: session } = await auth.getSession();
     if (!session) {
@@ -428,11 +470,10 @@ export const Route = createRoute({
 });
 ```
 
-`_auth/dashboard.tsx` and `_auth/devices.tsx` then declare
-`getParentRoute: () => AuthRoute` (where `AuthRoute` is the import of the
-above) so they live under the auth gate. File-based routing handles the
-file-tree-to-URL mapping; the only thing the file declares is the
-`getParentRoute` parent.
+`_auth/dashboard.tsx` and `_auth/devices.tsx` are placed in the `_auth/`
+directory and require no extra parent wiring — the Vite plugin reads the
+directory structure and auto-generates the parent-child relationship in
+`routeTree.gen.ts`.
 
 ## 6. Devices route
 
@@ -465,10 +506,13 @@ token returned by the API is shown in a copyable box.
 // apps/web/src/routes/_auth/devices.tsx — REFERENCE ONLY
 
 import { useState } from 'react';
+import { createFileRoute } from '@tanstack/react-router';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { listDevices, createDevice } from '../../lib/api';
 
-export default function DevicesPage() {
+export const Route = createFileRoute('/devices')({ component: DevicesPage });
+
+function DevicesPage() {
   const qc = useQueryClient();
   const { data, isLoading } = useQuery({ queryKey: ['devices'], queryFn: listDevices });
   const [name, setName] = useState('my-laptop');
@@ -611,11 +655,14 @@ fixes the API to return hourly data (this is exactly what
 ```tsx
 // apps/web/src/routes/_auth/dashboard.tsx — REFERENCE ONLY
 
+import { createFileRoute } from '@tanstack/react-router';
 import { useQuery } from '@tanstack/react-query';
 import { getDay } from '../../lib/api';
 import { DayTimelineChart, type DayTimelinePoint } from '../../lib/charts/dayTimeline';
 
-export default function DashboardPage() {
+export const Route = createFileRoute('/dashboard')({ component: DashboardPage });
+
+function DashboardPage() {
   const today = new Date().toISOString().slice(0, 10);
   const { data, isLoading } = useQuery({
     queryKey: ['day', today],
@@ -697,6 +744,32 @@ check two things in order:
 If both are true and `getSession` still returns null, the better-auth
 docs have a CORS / cookies section under Integrations — read it.
 
+### SSR session check fails: cookie not forwarded to API
+
+> **CAUTION — deferred.** The `_auth.tsx` `beforeLoad` calls
+> `auth.getSession()` which hits `:3000`. During SSR, the Nitro server
+> runs this check — but the browser's session cookie lives on `:3000`,
+> not `:5173`, so the SSR context has no cookie to send. Result:
+> `beforeLoad` sees no session and redirects to `/login` even for users
+> who are already logged in. On hydration the client re-checks, discovers
+> the session, and re-renders the dashboard — causing a flash of the
+> login page.
+>
+> **When this matters:** when the API is running and a logged-in user
+> hits an auth-gated route directly (hard reload or first visit).
+>
+> **Proper fixes (pick one):**
+>
+> 1. **Forward cookies in `beforeLoad`** — use `getEvent()` from
+>    `@tanstack/react-start` to read the incoming request's `Cookie`
+>    header and forward it to the API call. SSR has the session.
+> 2. **Proxy `/api/*` through Nitro** — add a Nitro server handler that
+>    forwards API calls. The browser talks to `:5173` only; cookies stay
+>    same-origin.
+>
+> For phase 0 this is deferred. The `errorComponent` on `__root.tsx`
+> catches unhandled fetch errors and redirects to `/login` as a fallback.
+
 ### ECharts renders blank
 ECharts needs an explicit height on its container. We set
 `style={{ height: 320 }}` on the container — that's the requirement.
@@ -726,14 +799,13 @@ needed.
 
 ## Done criteria
 
-- [ ] TanStack Start dev server boots on `:5173`
+- [X] TanStack Start dev server boots on `:5173`
 - [ ] `/login` form sends magic link email (visible in Resend logs)
 - [ ] Clicking link sets session cookie; browser lands on `/dashboard`
 - [ ] `/dashboard` shows ECharts stacked bar, auto-refreshing every 15s
 - [ ] `/devices` lists devices, allows creating one (returns enrollment token)
-- [ ] Auth gate redirects unauthed users from `_auth` routes to `/login`
-- [ ] `pnpm typecheck` passes
-- [ ] One commit: "feat(web): tanstack start app, magic-link auth, dashboard + devices"
+- [X] Auth gate redirects unauthed users from `_auth` routes to `/login`
+- [X] `pnpm typecheck` passes
+- [X] One commit: "feat(web): tanstack start app, magic-link auth, dashboard + devices"
 
-Next file: `05-daemon-setup.md` — Go daemon with stub tracker, uplink
-client, tray, enrollment CLI.
+- [ ] Optional: fix SSR session cookie forwarding (see "SSR session check fails" in Common pitfalls)
