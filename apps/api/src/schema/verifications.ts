@@ -1,13 +1,16 @@
 import { pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
 import { users } from './users';
 
-export const vouchers = pgTable('verifications', {
+export const verifications = pgTable('verifications', {
   id: uuid('id').primaryKey().defaultRandom(),
-  userId: uuid('user_id')
-    .notNull()
-    .references(() => users.id, { onDelete: 'cascade' }),
-  token: text('token').notNull(),
-  type: text('type').notNull(), // 'magic_link' | 'device_enroll' | ...
+  identifier: text('identifier').notNull(),
+  value: text('value').notNull(),
+  userId: uuid('user_id').references(() => users.id, {
+    onDelete: 'cascade',
+  }),
+  token: text('token'),
+  type: text('type'),
   expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 });
