@@ -1,14 +1,24 @@
 // [TODO] look into using better auth minimal
+import { drizzleAdapter } from '@better-auth/drizzle-adapter';
 import { betterAuth } from 'better-auth';
-import { drizzleAdapter } from 'better-auth/adapters/drizzle';
 import { magicLink } from 'better-auth/plugins';
+import { Resend } from 'resend';
 import { db } from './lib/db';
 
+const resend = new Resend(process.env.RESEND_API_KEY!)
+
 export const auth = betterAuth({
+  emailAndPassword: { enabled: false },
   plugins: [
     magicLink({
       sendMagicLink: async ({ email, token, url, metadata }, ctx) => {
-        //send email to user
+        const from = process.env.RESEND_FROM_EMAIL!
+        resend.emails.send({
+          from,
+          to: email,
+          subject: 'Sign in to ctrluhr',
+          html: `<a href="${url}">Click here to sign in</a>`,
+        })
       },
     }),
   ],
@@ -16,6 +26,8 @@ export const auth = betterAuth({
     provider: 'pg',
   }),
 });
+
+export type Auth = typeof auth;
 
 // FIXME(better-auth): the table/column names below diverge from better-auth's
 // default contract (plural `users`/`sessions`/`verifications`, `email_verified`
