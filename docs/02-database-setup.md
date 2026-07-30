@@ -515,12 +515,12 @@ Drizzle-kit doesn't auto-load `.env` files. Two solutions:
 - [X] pgvector extension enabled (verified via `pg_extension` query)
 - [X] Resend API key saved to `.env`
 - [ ] OpenAI API key saved to `.env`
-- [ ] `BETTER_AUTH_SECRET` generated and saved to `.env`
+- [X] `BETTER_AUTH_SECRET` generated and saved to `.env`
 - [X] `.env.example` committed with placeholders
 - [X] All 9 Drizzle schema files written and exports re-exported
 - [X] `drizzle.config.ts` configured
 - [X] First migration generated (or push applied) — all tables exist in DB
-- [ ] SQL verification confirms `activity_events.raw_embedding` is `vector(1536)`
+- [X] SQL verification confirms `activity_events.raw_embedding` is `vector(1536)`
 - [X] One commit: "feat(db): drizzle schema + initial migration"
 
 Next file: `03-api-setup.md` — Hono server bootstrap, better-auth magic link
