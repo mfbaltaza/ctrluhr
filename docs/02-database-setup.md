@@ -173,6 +173,8 @@ export const users = pgTable('users', {
   email: text('email').notNull().unique(),
   emailVerified: timestamp('email_verified').defaultNow(),
   name: text('name'),
+  // IANA timezone — day bucketing is user-local (ADR-0003)
+  timezone: text('timezone').notNull().default('UTC'),
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
 });
@@ -206,7 +208,7 @@ export const sessions = pgTable('sessions', {
 import { pgTable, uuid, text, timestamp } from 'drizzle-orm/pg-core';
 import { users } from './users';
 
-export const vouchers = pgTable('verifications', {
+export const verifications = pgTable('verifications', {
   id: uuid('id').primaryKey().defaultRandom(),
   userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
   token: text('token').notNull(),
@@ -229,7 +231,8 @@ export const devices = pgTable(
     userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
     name: text('name').notNull(),
     os: text('os').notNull(), // 'linux' | 'windows' | 'darwin'
-    apiTokenHash: text('api_token_hash').notNull(),
+    // 'active' | 'revoked' — devices are revoked, not deleted (ADR-0005)
+    status: text('status').notNull().default('active'),
     lastSeenAt: timestamp('last_seen_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   },
@@ -285,7 +288,6 @@ export const categoryRules = pgTable(
     categoryId: uuid('category_id').notNull().references(() => categories.id, { onDelete: 'cascade' }),
     patternType: text('pattern_type').notNull(), // 'app_name' | 'title_regex'
     pattern: text('pattern').notNull(),
-    priority: integer('priority').default(0),
   },
   (t) => [
     primaryKey({ columns: [t.categoryId, t.pattern] }),
@@ -294,7 +296,9 @@ export const categoryRules = pgTable(
 );
 ```
 
-Need to import `integer` — add it to the imports at the top.
+There is deliberately no `priority` column: rule evaluation order is fixed —
+title-regex rules first, then app-name rules, first hit wins (see
+`CONTEXT.md`).
 
 ### `apps/api/src/schema/activity-events.ts`
 
@@ -304,7 +308,6 @@ import {
   uuid,
   text,
   timestamp,
-  integer,
   index,
   vector,
 } from 'drizzle-orm/pg-core';
@@ -321,8 +324,6 @@ export const activityEvents = pgTable(
     appName: text('app_name').notNull(),
     windowTitle: text('window_title').notNull(),
     categoryId: uuid('category_id').references(() => categories.id),
-    // Snapshot of category.is_productive at event time
-    productive: integer('productive'),
     startedAt: timestamp('started_at', { withTimezone: true }).notNull(),
     endedAt: timestamp('ended_at', { withTimezone: true }).notNull(),
     // Cached embedding of (app || '' || window_title). Used for retroactive
@@ -357,7 +358,6 @@ export const habits = pgTable('habits', {
   name: text('name').notNull(),
   targetMinutesPerDay: integer('target_minutes_per_day').notNull().default(60),
   color: text('color').notNull().default('#22c55e'),
-  cadence: text('cadence').notNull().default('daily'),
   linkedCategoryId: uuid('linked_category_id').references(() => categories.id),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 });
@@ -385,15 +385,6 @@ export const habitCheckins = pgTable(
     uniqueIndex('habit_checkins_habit_day_uniq').on(t.habitId, t.day),
   ],
 );
-```
-
-### Re-export `integer` in `category-rules.ts` (fix forward)
-
-Earlier in that file we used `integer` without importing it. Edit the import
-line to:
-
-```ts
-import { pgTable, uuid, text, integer, index, primaryKey } from 'drizzle-orm/pg-core';
 ```
 
 ## 4. `drizzle.config.ts`

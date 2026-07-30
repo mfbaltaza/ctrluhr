@@ -188,11 +188,10 @@ them — the structure should fall out naturally:
 - Import `betterAuth` and `magicLink` (paths per the docs for your version).
 - Import the Drizzle adapter from whichever path your version exposes.
 - Pass the adapter with `provider: 'pg'` and the `schema` mapping.
-  Because our Drizzle tables are named `users` / `sessions` / `vouchers`
-  (plural, and `vouchers` is awkwardly named — see §2 in `02-database-setup.md`),
-  use the "Modifying Table Names" pattern from the Drizzle adapter docs to
-  map better-auth's default `user` / `session` / `verification` to our
-  `users` / `sessions` / `vouchers` tables.
+  Because our Drizzle tables are named `users` / `sessions` / `verifications`
+  (plural), use the "Modifying Table Names" pattern from the Drizzle adapter
+  docs to map better-auth's default `user` / `session` / `verification` to
+  our `users` / `sessions` / `verifications` tables.
 - Set `emailAndPassword: { enabled: false }` — magic link only.
 - Add the `magicLink` plugin with a `sendMagicLink` callback that calls
   `resend.emails.send({...})`. The `url` arg is the full link the user
@@ -227,7 +226,7 @@ export const auth = betterAuth({
     schema: {
       user: schema.users,
       session: schema.sessions,
-      verification: schema.vouchers,
+      verification: schema.verifications,
     },
   }),
   emailAndPassword: { enabled: false },       // magic link only
@@ -252,7 +251,7 @@ export type Auth = typeof auth;
 ### 3.5 Sync the schema
 
 better-auth may want a few extra columns on `users` / `sessions` /
-`vouchers` (e.g. `emailVerified`, `image`, `expiresAt`, `token`,
+`verifications` (e.g. `emailVerified`, `image`, `expiresAt`, `token`,
 `identifier`). Run the CLI's `generate` command (per the CLI docs) to see
 what it expects:
 
@@ -513,8 +512,9 @@ method chain and the `jwtVerify` options. The interesting knobs:
 - `alg: 'HS256'` — symmetric, same secret for sign and verify.
 - `iss: 'ctrluhr'`, `aud: 'ctrluhr-device'` — you must verify both
   on the read side or you accept any JWT signed with your secret.
-- `iat` only — no `exp`. Phase 0 doesn't expire device JWTs (revocation
-  is via `devices.api_token_hash` mismatch in a later phase). If you
+- `iat` only — no `exp`. Revocation is not token-based: the
+  `requireDevice` middleware (§5.5) checks the device's status on every
+  batch (ADR-0005), so a revoked device gets 401 immediately. If you
   want an expiry, set it; but then you need a refresh flow, which
   isn't worth the complexity yet.
 
@@ -556,18 +556,22 @@ export async function verifyDeviceJwt(token: string): Promise<{ deviceId: string
 shape: a Hono sub-app, middleware that validates the bearer token, sets
 `userId` + `deviceId`, and 401s on any failure.
 
-The only domain-specific bit is the `Authorization: Bearer <jwt>` header
-parsing — there's no library magic here, it's a string slice. The
-verification call is `verifyDeviceJwt()` from §5.4. After §5.4 reads the
-jose docs, this file should be obvious.
+The only domain-specific bits are the `Authorization: Bearer <jwt>` header
+parsing (there's no library magic here, it's a string slice) and the
+device-status check: one indexed read per request so a Revoked device gets
+401 immediately (ADR-0005). The verification call is `verifyDeviceJwt()`
+from §5.4. After §5.4 reads the jose docs, this file should be obvious.
 
 #### Reference — what the end file should look like
 
 ```ts
 // apps/api/src/lib/device-auth.ts — REFERENCE ONLY
 
+import { eq } from 'drizzle-orm';
 import { createHono } from './hono-factory';
 import { verifyDeviceJwt } from './device-jwt';
+import { db } from './db';
+import { devices } from '../schema/devices';
 
 export const requireDevice = createHono();
 
@@ -579,6 +583,15 @@ requireDevice.use('*', async (c, next) => {
   const token = header.slice('Bearer '.length);
   try {
     const { deviceId, userId } = await verifyDeviceJwt(token);
+    // Revocation is real: one indexed status read per batch (ADR-0005).
+    const [device] = await db
+      .select({ status: devices.status })
+      .from(devices)
+      .where(eq(devices.id, deviceId))
+      .limit(1);
+    if (!device || device.status !== 'active') {
+      return c.json({ error: 'device revoked' }, 401);
+    }
     c.set('userId', userId);
     c.set('deviceId', deviceId);
     await next();
@@ -631,18 +644,19 @@ specific reason. Read the flow end-to-end, then write the handlers.
 
 1. **`POST /devices`** (auth: user session) — user creates an enrollment
    token. We do **not** create a `devices` row yet — only a row in
-   `vouchers` with `type='device_enroll'`. This avoids orphan device rows
-   when the user generates a token and never uses it. The token expires
-   in 30 minutes.
+   `verifications` with `type='device_enroll'`. This avoids orphan device
+   rows when the user generates a token and never uses it. The token
+   expires in 30 minutes.
 
 2. **User copies the token to the daemon machine** and runs
    `./ctrluhr enroll <token> <name> <os>` (that's `05-daemon-setup.md`).
 
 3. **`POST /devices/enroll`** (auth: none — the token IS the auth) —
-   daemon exchanges the token. We look up the voucher, validate it's
-   unexpired and of type `device_enroll`, then *now* create the `devices`
-   row. The voucher is deleted (one-time use). The daemon receives a
-   long-lived device JWT, which it stores in `~/.config/ctrluhr/config.toml`.
+   daemon exchanges the token. We look up the enrollment-token row,
+   validate it's unexpired and of type `device_enroll`, then *now* create
+   the `devices` row. The token row is deleted (one-time use). The daemon
+   receives a long-lived device JWT, which it stores in
+   `~/.config/ctrluhr/config.toml`.
 
 The asymmetry — token-only auth on `/enroll` but user-session auth on
 `/devices` — is intentional. The enrollment endpoint is the *only* place
@@ -650,35 +664,13 @@ in the system where something proves its identity with a pre-shared
 token instead of a session or JWT. Everywhere else, the caller is
 already identified.
 
-### 6.3 Design decision: what is `api_token_hash` storing?
+### 6.3 `api_token_hash` — dropped (ADR-0005)
 
-This part of the original draft confused me, so I'll write down what's
-actually happening. Read carefully.
-
-- We generate `apiToken = randomBytes(48).toString('hex')` (a 96-char
-  hex string). This is **not** what we return to the daemon.
-- We hash it: `apiTokenHash = sha256(apiToken)`. We store this in
-  `devices.api_token_hash`. The raw `apiToken` is discarded.
-- We sign and return a **JWT** (via `signDeviceJwt` from §5.4) that
-  carries the device id and user id. The daemon stores the JWT in its
-  config and sends it on every `/events` POST.
-- On every `/events` POST, the API verifies the JWT signature (via
-  `verifyDeviceJwt` from §5.4) — no DB lookup required for auth.
-
-So what is `api_token_hash` for? **It's a permanent identifier for the
-device that was provisioned from this enrollment.** Right now we don't
-use it. In phase 5+ you might want to:
-- Add a `/devices/:id/rotate` endpoint that issues a new JWT, hashes it,
-  updates `api_token_hash`, and signals the daemon to re-enroll.
-- Revoke a specific device without rotating the JWT secret.
-
-If this dual-thing (raw random + JWT + hash of raw random) feels like
-overkill, it is. For phase 0 you can simplify to: drop `api_token_hash`
-entirely, return only the JWT, and skip the random/hash dance. The
-trade-off is that rotation becomes harder later. Keep the column in
-the schema either way (it's already in `02-database-setup.md`); the
-question is just whether to populate it. The reference below populates
-it; you decide.
+The original draft stored a SHA-256 hash of a separate random string to
+support "future rotation". With revocation handled by the per-batch
+device-status check (§5.5), rotation is simply: revoke the device and
+re-enroll. The column and the random/hash dance are gone —
+`POST /devices/enroll` returns only the device JWT.
 
 ### 6.4 Write `apps/api/src/routes/devices.ts`
 
@@ -705,10 +697,10 @@ import { createHono } from '../lib/hono-factory';
 import { requireUser } from '../lib/session';
 import { db } from '../lib/db';
 import { devices } from '../schema/devices';
-import { vouchers } from '../schema/verifications';
+import { verifications } from '../schema/verifications';
 import { eq } from 'drizzle-orm';
 import { signDeviceJwt } from '../lib/device-jwt';
-import { randomBytes, createHash } from 'crypto';
+import { randomBytes } from 'crypto';
 
 const app = createHono();
 
@@ -739,7 +731,7 @@ app.post('/', requireUser, async (c) => {
   const token = randomBytes(32).toString('hex');
   const expires = new Date(Date.now() + 30 * 60 * 1000); // 30-min window
 
-  await db.insert(vouchers).values({
+  await db.insert(verifications).values({
     userId,
     token,
     type: 'device_enroll',
@@ -760,33 +752,29 @@ app.post('/enroll', async (c) => {
     return c.json({ error: 'enrollment_token, name, os required' }, 400);
   }
 
-  // Look up the unused, unexpired enrollment voucher.
+  // Look up the unused, unexpired enrollment token.
   const rows = await db
     .select()
-    .from(vouchers)
-    .where(eq(vouchers.token, body.enrollment_token))
+    .from(verifications)
+    .where(eq(verifications.token, body.enrollment_token))
     .limit(1);
   const row = rows[0];
   if (!row || row.type !== 'device_enroll' || row.expiresAt < new Date()) {
     return c.json({ error: 'invalid or expired token' }, 401);
   }
 
-  // Create the device. api_token_hash is the SHA-256 of a separate random
-  // string — see §6.3 for why we keep this even though we return a JWT.
-  const apiToken = randomBytes(48).toString('hex');
-  const apiTokenHash = createHash('sha256').update(apiToken).digest('hex');
+  // Create the device. (No api_token_hash — see §6.3 / ADR-0005.)
   const [device] = await db
     .insert(devices)
     .values({
       userId: row.userId,
       name: body.name,
       os: body.os,
-      apiTokenHash,
     })
     .returning();
 
-  // Voucher is one-time-use; delete it.
-  await db.delete(vouchers).where(eq(vouchers.id, row.id));
+  // Enrollment token is one-time-use; delete it.
+  await db.delete(verifications).where(eq(verifications.id, row.id));
 
   // Issue the long-lived JWT the daemon will actually use.
   const jwt = await signDeviceJwt({ deviceId: device.id, userId: row.userId });
@@ -819,8 +807,8 @@ curl -X POST http://localhost:3000/devices/enroll \
 
 If `POST /devices` returns 401, your session cookie isn't reaching the
 API. If `POST /devices/enroll` returns "invalid or expired token" on a
-fresh token, the `vouchers.type` check is failing — re-check the insert
-in `POST /devices` and the type string in the `where` clause match.
+fresh token, the `verifications.type` check is failing — re-check the
+insert in `POST /devices` and the type string in the `where` clause match.
 
 ## 7. Events route + categorizer + embeddings
 
@@ -887,11 +875,13 @@ export async function embed(text: string): Promise<number[]> {
 
 ### 7.3 `lib/categorizer.ts` — rules-only for phase 0
 
-The categorizer is what turns `(appName, windowTitle)` into
-`(categoryId, productive)`. Phase 0 implements one rule type: exact
-match of `appName` against `category_rules.pattern` (case-insensitive).
-Phase 2 adds `title_regex` rules and an embedding-fallback when no rule
-matches — both are described in `07-future-phases.md`.
+The categorizer is what turns `(appName, windowTitle)` into a
+`categoryId`. Phase 0 implements one rule type: exact match of `appName`
+against `category_rules.pattern` (case-insensitive). Phase 2 adds
+`title_regex` rules and an embedding-fallback when no rule matches —
+redesigned client-side by ADR-0002. Productivity is **not** resolved
+here: it is always joined live from the category at query time
+(ADR-0004).
 
 Read the Drizzle query builder doc to confirm the `select` + `innerJoin`
 + `where(and(...))` shape. The function is small; the only design
@@ -919,11 +909,10 @@ export async function categorizeEvent(
   userId: string,
   appName: string,
   windowTitle: string,
-): Promise<{ categoryId: string | null; productive: number | null }> {
+): Promise<string | null> {
   const rules = await db
     .select({
       categoryId: categoryRules.categoryId,
-      isProductive: categories.isProductive,
       pattern: categoryRules.pattern,
     })
     .from(categoryRules)
@@ -932,10 +921,7 @@ export async function categorizeEvent(
 
   const hit = rules.find((r) => r.pattern.toLowerCase() === appName.toLowerCase());
 
-  if (hit) {
-    return { categoryId: hit.categoryId, productive: hit.isProductive };
-  }
-  return { categoryId: null, productive: null };
+  return hit?.categoryId ?? null;
 }
 ```
 
@@ -998,7 +984,7 @@ app.post('/', async (c) => {
   const events = parsed.data.events;
   const receipts = [];
   for (const ev of events) {
-    const { categoryId, productive } = await categorizeEvent(
+    const categoryId = await categorizeEvent(
       userId,
       ev.app_name,
       ev.window_title,
@@ -1013,7 +999,6 @@ app.post('/', async (c) => {
         appName: ev.app_name,
         windowTitle: ev.window_title,
         categoryId,
-        productive,
         startedAt: new Date(ev.started_at),
         endedAt: new Date(ev.ended_at),
       })
@@ -1063,16 +1048,19 @@ all NULLs.
 SELECT
   activity_events.category_id,
   categories.name AS category_name,
-  activity_events.productive,
+  categories.is_productive,
   sum(extract(epoch from activity_events.ended_at - activity_events.started_at))::int
     AS total_seconds
 FROM activity_events
 LEFT JOIN categories ON categories.id = activity_events.category_id
 WHERE activity_events.user_id = $1
   AND activity_events.started_at >= $2
-  AND activity_events.started_at <= $3
-GROUP BY activity_events.category_id, categories.name, activity_events.productive
+  AND activity_events.started_at < $3
+GROUP BY activity_events.category_id, categories.name, categories.is_productive
 ```
+
+Productivity comes live from the category (ADR-0004); the date range is a
+half-open interval over the User-local day (ADR-0003).
 
 The Drizzle version of this query is mechanical: project the columns,
 `.leftJoin(categories, ...)`, `.where(and(eq(userId), sql\`started_at >= ${start}\`, ...))`,
@@ -1081,10 +1069,18 @@ template inside the `select` projection — read the doc for that.
 
 ### 8.3 Date handling
 
-`date` comes in as a `YYYY-MM-DD` query param (default: today UTC). We
-parse it to a UTC midnight start and a UTC end-of-day end, then filter
-on `started_at`. The two ends are passed as JS `Date` objects; Drizzle
-serializes them to Postgres `timestamptz` correctly.
+`date` comes in as a `YYYY-MM-DD` query param (default: today **in the
+User's timezone**). Day boundaries are user-local (ADR-0003): the User's
+IANA timezone lives on `users.timezone` (default `'UTC'`, set from the
+browser at first login), and we ask Postgres to convert local-midnight
+boundaries into UTC instants for the `started_at` filter:
+
+```sql
+('2026-07-14'::date)::timestamp AT TIME ZONE 'America/New_York'  -- → timestamptz of local midnight
+```
+
+The filter is a half-open range `>= local midnight` and `< next local
+midnight`, which also avoids the `23:59:59.999` end-of-day hack.
 
 The `/^\d{4}-\d{2}-\d{2}$/` regex is a quick sanity check. It accepts
 "2026-02-30" which isn't a real day, but Postgres returns zero rows for
@@ -1101,7 +1097,7 @@ or a `Date.parse(...)` check.
 import { createHono } from '../lib/hono-factory';
 import { requireUser } from '../lib/session';
 import { db } from '../lib/db';
-import { activityEvents, categories } from '../schema';
+import { activityEvents, categories, users } from '../schema';
 import { and, eq, sql } from 'drizzle-orm';
 
 const app = createHono();
@@ -1110,19 +1106,26 @@ app.use('*', requireUser);
 
 app.get('/day', async (c) => {
   const userId = c.get('userId');
+  // The web app always sends an explicit user-local date; the UTC fallback
+  // below only serves bare API calls (curl) where UTC-today is fine.
   const date = c.req.query('date') ?? new Date().toISOString().slice(0, 10);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
     return c.json({ error: 'date must be YYYY-MM-DD' }, 400);
   }
 
-  const start = new Date(`${date}T00:00:00Z`);
-  const end = new Date(`${date}T23:59:59.999Z`);
+  // Day boundaries are user-local (ADR-0003): fetch the User's IANA tz.
+  const [me] = await db
+    .select({ tz: users.timezone })
+    .from(users)
+    .where(eq(users.id, userId))
+    .limit(1);
+  const userTz = me?.tz ?? 'UTC';
 
   const rows = await db
     .select({
       categoryId: activityEvents.categoryId,
       categoryName: categories.name,
-      productive: activityEvents.productive,
+      productive: categories.isProductive,
       totalSeconds: sql<number>`sum(extract(epoch from ${activityEvents.endedAt} - ${activityEvents.startedAt}))::int`,
     })
     .from(activityEvents)
@@ -1130,11 +1133,11 @@ app.get('/day', async (c) => {
     .where(
       and(
         eq(activityEvents.userId, userId),
-        sql`${activityEvents.startedAt} >= ${start}`,
-        sql`${activityEvents.startedAt} <= ${end}`,
+        sql`${activityEvents.startedAt} >= (${date}::date)::timestamp AT TIME ZONE ${userTz}`,
+        sql`${activityEvents.startedAt} < ((${date}::date + 1)::timestamp AT TIME ZONE ${userTz})`,
       ),
     )
-    .groupBy(activityEvents.categoryId, categories.name, activityEvents.productive);
+    .groupBy(activityEvents.categoryId, categories.name, categories.isProductive);
 
   return c.json({
     date,
@@ -1210,13 +1213,14 @@ git commit -m "feat(api): hono server, better-auth magic link, /events + /device
 
 ## Common pitfalls
 
-### better-auth `drizzleAdapter` rejects our `vouchers` table name
-The `verification: schema.vouchers` mapping works because better-auth's
-adapter accepts any Drizzle table whose shape matches. If the column set
-differs, re-run the `auth generate` CLI (per the Drizzle adapter docs'
-"Schema generation & migration" section) for the shape it expects and add
-the missing columns. Note: the CLI package is now the unscoped `auth`
-(`pnpm exec auth@latest generate ...`), not the older `@better-auth/cli`.
+### better-auth `drizzleAdapter` rejects our `verifications` table name
+The `verification: schema.verifications` mapping works because
+better-auth's adapter accepts any Drizzle table whose shape matches. If
+the column set differs, re-run the `auth generate` CLI (per the Drizzle
+adapter docs' "Schema generation & migration" section) for the shape it
+expects and add the missing columns. Note: the CLI package is now the
+unscoped `auth` (`pnpm exec auth@latest generate ...`), not the older
+`@better-auth/cli`.
 
 ### `import { magicLink } from 'better-auth/plugins'` fails
 The path may differ in your installed version. Check

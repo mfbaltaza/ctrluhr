@@ -126,6 +126,7 @@ When you forget why we picked something, come back here.
    a. rules match (app_name → category)? assign.
    b. skip embed if raw_embedding cached and title matches; else embed once.
    c. nearest category by cosine sim > threshold? assign. else category_id NULL.
+   (b–c are phase-2+ and move client-side at the encryption gate — ADR-0002.)
 6. INSERT … ON CONFLICT DO NOTHING (idempotent — daemon can replay safely).
 7. Return { event_id, category_id|null }[] for the daemon's local state.
 ```
@@ -164,13 +165,18 @@ When you forget why we picked something, come back here.
 This is the target. Phase 0 creates all of it (including pgvector columns) so
 we never migrate. See `02-database-setup.md` for the step-by-step.
 
+> **Note:** ADR-0002 (client-side encryption) gates phase 1: `window_title`
+> and `app_name` become client-encrypted content columns, and the
+> `raw_embedding` / `categories.embedding` columns lose their server-side
+> role. The encrypted schema shape is designed in the phase-1 build doc.
+
 ```sql
 CREATE EXTENSION IF NOT EXISTS vector;
 
 -- better-auth manages its own tables; we create them via Drizzle schema
 -- (user, session, verification). below are ctrluhr-owned tables.
 
-users          (id, email, created_at)  -- better-auth user table
+users          (id, email, timezone, created_at)  -- better-auth user table + our IANA tz setting (ADR-0003)
 sessions       (id, user_id, expires_at, token)
 verifications  (id, user_id, token, type, expires_at)
 
@@ -179,7 +185,7 @@ devices
   user_id         uuid not null references users(id) on delete cascade
   name            text not null
   os              text not null                  -- 'linux' | 'windows' | 'darwin'
-  api_token_hash  text not null                  -- argon2 hash of long-lived key
+  status          text not null default 'active' -- 'active' | 'revoked' (ADR-0005)
   last_seen_at    timestamptz
   created_at      timestamptz default now()
   index (user_id)
@@ -208,10 +214,8 @@ activity_events
   app_name        text not null
   window_title    text not null                  -- full title per user decision
   category_id     uuid references categories(id) -- nullable: uncategorized, awaiting relabel
-  productive      int                            -- snapshot of category.is_productive at event time; nullable until categorized
   started_at      timestamptz not null
   ended_at       timestamptz not null
-  duration_sec    int generated always as (extract(epoch from ended_at - started_at)) stored
   raw_embedding   vector(1536)                   -- cached embedding of (app || '' || title); nullable until first embedding
   -- indexes
   index (user_id, started_at desc)
@@ -224,7 +228,6 @@ habits
   name                     text not null
   target_minutes_per_day   int not null default 60
   color                    text not null default '#22c55e'
-  cadence                  text not null default 'daily'   -- 'daily' | 'weekly' | cron expr
   linked_category_id       uuid references categories(id) -- can be null for manual-only habits
   created_at               timestamptz default now()
 
@@ -245,18 +248,24 @@ habit_checkins
   when the event lands; reuse forever. When you add new categories later,
   you can re-classify retroactively *without* paying OpenAI again — just
   re-query the cached embeddings against the new category centroids.
-- **`productive` is snapshotted at event-time.** If a user reclassifies a
-  category from neutral to productive, OLD events keep their old value. This
-  is intentional: analytics for "was last week productive?" should reflect
-  what the user believed at the time, not current classifications. Add a
-  `productive_current` view at query time if you want the alternative.
-- **`duration_sec` is generated always stored** — Postgres computes it
-  cheaply, and you get range queries like `WHERE duration_sec > 60` for free.
+- **Productivity is read live from the category (ADR-0004).** There is no
+  per-event snapshot: an event's productivity is always its category's
+  current `is_productive`, so reclassifying a category corrects history.
+  `activity_events.productive` does not exist.
+- **`duration_sec` was dropped** — Drizzle can't express generated columns
+  cleanly (see `02`). Compute duration at query time
+  (`EXTRACT(EPOCH FROM ended_at - started_at)`); a raw-SQL migration can
+  re-add it later if range queries need it.
 - **Idempotent inserts** via `ON CONFLICT (id) DO NOTHING`: daemon batches can
   be replayed safely on network failure. The daemon generates the UUID on
   emission, not the API.
 
 ## 5. Categorization (phase 2 detail — read now, implement later)
+
+> **Superseded by ADR-0002.** Server-side embeddings over plaintext titles
+> are no longer the design: rules run in the daemon and embedding matching
+> is browser-mediated. This section is kept for the record; the phase-2
+> build doc will be written from the ADR.
 
 Two-tier pipeline, rules first then embeddings:
 
@@ -267,10 +276,9 @@ Rules map (category_rules):
   pattern_type='title_regex', pattern='youtube\.com' → category "Entertainment"
 
 For each new event:
-  1. Try rule match:
-     - app_name IN category_rules(pattern_type='app_name')
+  1. Try rule match (title regexes first, then app names — first hit wins):
      - regex_match(window_title, category_rules(pattern_type='title_regex'))
-     - First hit wins (priority by rule order).
+     - app_name IN category_rules(pattern_type='app_name')
   2. If no rule matched:
      - Embed (app + ' ' + title) via text-embedding-3-small.
      - Cache the embedding in raw_embedding.
@@ -300,7 +308,7 @@ match possible for that category until at least one labeled event exists.
 | --- | --- | --- |
 | 0 | Plumbing works end-to-end with synthetic data | Daemon stub → API → Neon → React dashboard shows synthesized activity |
 | 1 | Real tracking | Hyprland/X11 + Windows trackers; full day's actual activity on dashboard |
-| 2 | Categorization | pgvector hybrid pipeline; relabel UI; uncategorized queue stays small |
+| 2 | Categorization | Client-side hybrid pipeline (ADR-0002); relabel UI; uncategorized queue stays small |
 | 3 | Habits | Define habit loops, daily checkins auto-derived from events, streak heatmaps |
 | 4 | AI | Weekly recap, "why am I distracted at 3pm?" grounded answers via Vercel AI SDK |
 | 5 | SaaS hardening | Stripe billing, rate limits, auto-update pipeline, observability |

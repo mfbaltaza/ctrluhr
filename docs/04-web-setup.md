@@ -663,7 +663,8 @@ import { DayTimelineChart, type DayTimelinePoint } from '../../lib/charts/dayTim
 export const Route = createFileRoute('/dashboard')({ component: DashboardPage });
 
 function DashboardPage() {
-  const today = new Date().toISOString().slice(0, 10);
+  // User-local today (ADR-0003) — en-CA formats as YYYY-MM-DD in the browser's tz.
+  const today = new Date().toLocaleDateString('en-CA');
   const { data, isLoading } = useQuery({
     queryKey: ['day', today],
     queryFn: () => getDay(today),

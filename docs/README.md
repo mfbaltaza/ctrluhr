@@ -81,9 +81,13 @@ Each file is self-contained for its phase. Read them in order the first time:
 | `06-phase0-smoke-test.md`     | End-to-end verification checklist. Run this when you think phase 0 is done. |
 | `07-future-phases.md`         | Phases 1–5 in detail. Read when you're ready to start the next phase. |
 
+Domain language and the decisions behind it live in `CONTEXT-MAP.md` →
+`CONTEXT.md` and `docs/adr/` — use the glossary's terms when writing code,
+issues, or new docs, and check the ADRs before re-litigating a decision.
+
 ## Phase you are currently on
 
-Phase 0 — MVP plumbing. Monorepo skeleton (Nx + pnpm + Biome + Go module) is in place; next: 02-database-setup. Goal: synthetic event from a stub daemon shows up on your React dashboard, behind magic-link auth. Real tracking starts in phase 1.
+Phase 0 — MVP plumbing. Monorepo, database schema, and web scaffold are committed; next: `03-api-setup.md` (API routes), then `05-daemon-setup.md`, then the `06` smoke test. Goal: synthetic event from a stub daemon shows up on your React dashboard, behind magic-link auth. Real tracking starts in phase 1 — gated on client-side encryption (ADR-0002).
 
 ## Rules of engagement for self-building
 

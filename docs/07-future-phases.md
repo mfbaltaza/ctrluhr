@@ -131,6 +131,12 @@ breaking changes, better-auth's plugin API evolves, etc.).
 **Goal:** stop labeling everything "Uncategorized". Hybrid rules + embeddings
 auto-categorize 90%+ of events; user relabels the rest via UI.
 
+> **Superseded in part by ADR-0002.** Rules run in the daemon and embedding
+> matching is browser-mediated (BYOK, or an explicitly less-private proxied
+> tier); the server-side OpenAI + pgvector-centroid pipeline written below
+> is no longer the design. Rewrite this phase's build doc from the ADR when
+> you start it.
+
 **Docs to read when you start this phase:**
 
 - **pgvector distance operators** — https://github.com/pgvector/pgvector#vector-operators
@@ -236,7 +242,7 @@ auto-categorize 90%+ of events; user relabels the rest via UI.
 ### Web work
 
 1. **Habits page** (`/_auth/habits`)
-   - Create form (name, target minutes, cadence, linked category, color).
+   - Create form (name, target minutes, linked category, color).
    - List with current streak + today's progress bar.
    - Manual checkin button (override the auto-derived value).
    - Streak heatmap (ECharts calendar).
@@ -258,6 +264,12 @@ auto-categorize 90%+ of events; user relabels the rest via UI.
 
 **Goal:** ask "why am I distracted at 3pm?" and get a grounded answer.
 Surface weekly recaps. Find similar sessions.
+
+> **Superseded in part by ADR-0002.** The server never sees plaintext
+> activity content, so server-side AI over events as written below is no
+> longer the design: AI features become client-mediated (the browser
+> decrypts in-session and talks to the provider directly). Rewrite this
+> phase's build doc from the ADR when you start it.
 
 **Docs to read when you start this phase:**
 

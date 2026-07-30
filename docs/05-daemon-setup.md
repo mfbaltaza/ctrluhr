@@ -785,7 +785,7 @@ API, make sure `ev.started_at` is sent as an ISO string —
 
 ### Enroll returns 401 "invalid or expired token"
 - Token from web UI has a 30-min window. Re-create if expired.
-- API's `vouchers` table lookup found a row but `type !== 'device_enroll'`.
+- API's `verifications` table lookup found a row but `type !== 'device_enroll'`.
   Check the type column in DB.
 
 ### Zombie events after kill
