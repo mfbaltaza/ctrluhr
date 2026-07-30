@@ -256,12 +256,14 @@ better-auth may want a few extra columns on `users` / `sessions` /
 what it expects:
 
 ```sh
-pnpm exec auth@latest generate --config src/auth.ts --output src/schema
+pnpm dlx auth@latest generate --config src/auth.ts --output src/schema --yes
 ```
 
-(That command name and flags change — always check the current CLI docs
-at https://www.better-auth.com/docs/concepts/cli. Older docs called the
-package `@better-auth/cli`; current docs use the unscoped `auth` package.)
+(`pnpm exec` resolves a *local* package and won't find the CLI; use
+`pnpm dlx` or `npx`. The command name and flags change — always check
+the current CLI docs at https://www.better-auth.com/docs/concepts/cli.
+Older docs called the package `@better-auth/cli`; current docs use the
+unscoped `auth` package.) See ADR-0006 for why this step is not optional.
 
 It'll print a Drizzle schema diff. Compare each table to your
 `apps/api/src/schema/{users,sessions,verifications}.ts` and add the missing

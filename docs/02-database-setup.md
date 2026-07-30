@@ -54,7 +54,7 @@ DATABASE_URL="postgresql://user:password@ep-xxx.region.aws.neon.tech/ctrluhr?ssl
 
 # Auth — better-auth
 BETTER_AUTH_SECRET="change-me-32-bytes-of-random-string"
-BETTER_AUTH_BASE_URL="http://localhost:3000"
+BETTER_AUTH_URL="http://localhost:3000"
 API_BASE_URL="http://localhost:3000"
 
 # Resend (magic link emails)

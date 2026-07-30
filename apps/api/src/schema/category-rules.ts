@@ -1,11 +1,11 @@
 import { sql } from 'drizzle-orm';
-import { check, index, integer, pgTable, primaryKey, text, uuid } from 'drizzle-orm/pg-core';
+import { check, index, integer, pgTable, primaryKey, text } from 'drizzle-orm/pg-core';
 import { categories } from './categories';
 
 export const categoryRules = pgTable(
   'category_rules',
   {
-    categoryId: uuid('category_id')
+    categoryId: text('category_id')
       .notNull()
       .references(() => categories.id, { onDelete: 'cascade' }),
     patternType: text('pattern_type').notNull(), // 'app_name' | 'title_regex'

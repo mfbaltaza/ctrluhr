@@ -1,4 +1,4 @@
-import { index, integer, pgTable, text, timestamp, uuid, vector } from 'drizzle-orm/pg-core';
+import { index, integer, pgTable, text, timestamp, vector } from 'drizzle-orm/pg-core';
 import { categories } from './categories';
 import { devices } from './devices';
 import { users } from './users';
@@ -6,16 +6,16 @@ import { users } from './users';
 export const activityEvents = pgTable(
   'activity_events',
   {
-    id: uuid('id').primaryKey().defaultRandom(),
-    userId: uuid('user_id')
+    id: text('id').primaryKey(),
+    userId: text('user_id')
       .notNull()
       .references(() => users.id, { onDelete: 'cascade' }),
-    deviceId: uuid('device_id')
+    deviceId: text('device_id')
       .notNull()
       .references(() => devices.id, { onDelete: 'cascade' }),
     appName: text('app_name').notNull(),
     windowTitle: text('window_title').notNull(),
-    categoryId: uuid('category_id').references(() => categories.id),
+    categoryId: text('category_id').references(() => categories.id),
     // Snapshot of category.is_productive at event time
     productive: integer('productive'),
     startedAt: timestamp('started_at', { withTimezone: true }).notNull(),

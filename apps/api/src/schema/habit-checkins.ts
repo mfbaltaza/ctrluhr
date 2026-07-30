@@ -1,15 +1,15 @@
-import { boolean, date, integer, pgTable, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
+import { boolean, date, integer, pgTable, text, timestamp, uniqueIndex } from 'drizzle-orm/pg-core';
 import { habits } from './habits';
 import { users } from './users';
 
 export const habitCheckins = pgTable(
   'habit_checkins',
   {
-    id: uuid('id').primaryKey().defaultRandom(),
-    habitId: uuid('habit_id')
+    id: text('id').primaryKey(),
+    habitId: text('habit_id')
       .notNull()
       .references(() => habits.id, { onDelete: 'cascade' }),
-    userId: uuid('user_id')
+    userId: text('user_id')
       .notNull()
       .references(() => users.id, { onDelete: 'cascade' }),
     day: date('day').notNull(),

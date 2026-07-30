@@ -7,7 +7,6 @@ import {
   text,
   timestamp,
   uniqueIndex,
-  uuid,
   vector,
 } from 'drizzle-orm/pg-core';
 import { users } from './users';
@@ -15,8 +14,8 @@ import { users } from './users';
 export const categories = pgTable(
   'categories',
   {
-    id: uuid('id').primaryKey().defaultRandom(),
-    userId: uuid('user_id')
+    id: text('id').primaryKey(),
+    userId: text('user_id')
       .notNull()
       .references(() => users.id, { onDelete: 'cascade' }),
     name: text('name').notNull(),
