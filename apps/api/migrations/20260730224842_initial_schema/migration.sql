@@ -1,3 +1,7 @@
+-- pgvector provides the vector(1536) type used by activity_events.raw_embedding
+-- and categories.embedding. Neon enables it already; this is a no-op there and
+-- a guard for local/fresh databases.
+CREATE EXTENSION IF NOT EXISTS vector;--> statement-breakpoint
 CREATE TABLE "activity_events" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
 	"user_id" uuid NOT NULL,
