@@ -3,8 +3,8 @@ import { users } from './users';
 
 export const verifications = pgTable('verifications', {
   id: uuid('id').primaryKey().defaultRandom(),
-  identifier: text('identifier').notNull(),
-  value: text('value').notNull(),
+  identifier: text('identifier'),
+  value: text('value'),
   userId: uuid('user_id').references(() => users.id, {
     onDelete: 'cascade',
   }),

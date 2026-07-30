@@ -88,8 +88,8 @@ CREATE TABLE "users" (
 --> statement-breakpoint
 CREATE TABLE "verifications" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-	"identifier" text NOT NULL,
-	"value" text NOT NULL,
+	"identifier" text,
+	"value" text,
 	"user_id" uuid,
 	"token" text,
 	"type" text,
