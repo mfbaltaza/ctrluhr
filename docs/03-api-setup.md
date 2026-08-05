@@ -1,70 +1,196 @@
 # 03 — API Setup
 
 Goal: a running Hono server on Bun that:
+
 - boots on `:3000`
-- mounts better-auth `/auth/*` with **magic link** (Resend email)
-- exposes `POST /events` (device JWT auth) — validates + persists batches
-- exposes `POST /devices` (user session auth) — create a device, return one-time enrollment token
-- exposes `POST /devices/enroll` — exchange token for long-lived device JWT
-- exposes `GET /analytics/day` (user session auth) — return daily aggregates for the dashboard
-- exposes `GET /healthz` (no auth) — for sanity checks
+- mounts better-auth `/auth/*` with magic link (Resend email)
+- exposes `POST /events` (Device Key auth) — validate + idempotently persist batches, return receipts
+- exposes `POST /devices` (user session auth) — create an Enrollment Token
+- exposes `POST /devices/enroll` (token auth) — exchange the token for a long-lived Device Key
+- exposes `GET /analytics/day` (user session auth) — daily aggregates for the dashboard
+- exposes `GET /healthz` (no auth) — liveness probe
 
-By the end of this file the smoke flow is:
-`curl /healthz → 200` + sign in via magic link via API + create device + enroll
-and post events.
+By the end: `curl /healthz` returns 200, a magic-link login lands a session cookie,
+and a Device can enroll and post an event batch that shows up in `/analytics/day`.
 
-> Assumes `01-monorepo-setup.md` + `02-database-setup.md` are done.
+## State of this file
 
-## Conventions we use
+This file follows the convention in `docs/README.md` (ADR-0007): every step is
+eight fields, Assumes/Produces chain the steps together, Verify blocks are law,
+code wins for built phases. The ADRs that constrain this phase:
 
-- **TypeScript everywhere**, strict, no `any` for new code (use `unknown` + parse).
-- **Files export a single `app` (a Hono instance)**. `index.ts` mounts them.
-- **Errors** return JSON `{ error: "..." }` with the right HTTP status. No exceptions leak.
-- **Auth setup**: Hono middleware verifies the session cookie or the device
-  `Authorization: Bearer <jwt>` — both at the middleware layer, never inline per route.
+- **ADR-0006** — auth-managed id columns are `text`; §3.5 schema-sync is mandatory.
+- **ADR-0005** — Devices are Revoked, not deleted; device auth is JWT signature +
+  a per-batch DB status check; rotation is revoke + re-enroll (no token-hash dance).
+- **ADR-0004** — productivity is read live from the Category, never stored on the event.
+- **ADR-0003** — analytics day boundaries are the User's local timezone.
+- **ADR-0002** — server-side embedding categorization is superseded; phase 0's
+  events route is **ingest-only** (validate, idempotent insert, return receipts).
+
+Built vs plan-first, checked against `apps/api/src/`:
+
+| Section | Status | Evidence |
+| --- | --- | --- |
+| §0 deps | **built** | `apps/api/package.json` |
+| §1 DB client | **built** | `apps/api/src/lib/db.ts` |
+| §2 schema package | **built** | `packages/schema/src/event.ts` |
+| §3 better-auth + schema-sync | **built** | `apps/api/src/auth.ts`, `src/schema/*`, `test-resend.ts` |
+| §4 Hono bootstrap | **plan-first** | `apps/api/src/index.ts` is still the bare hello-world scaffold |
+| §5 auth middlewares | **plan-first** | `src/lib/` contains only `db.ts`; no `hono-factory.ts`/`session.ts`/`device-jwt.ts`/`device-auth.ts` |
+| §6 devices routes | **plan-first** | no `src/routes/` directory at all |
+| §7 events route | **plan-first** | no `src/routes/events.ts` |
+| §8 analytics route | **plan-first** | no `src/routes/analytics.ts` |
+| §9 run + verify | **mixed** | built smoke test exists; boot/curl flow needs §4–8 |
+
+The doc's domain terms come from `CONTEXT.md` — a **Device Key** is the long-lived
+JWT, an **Enrollment Token** is the one-time short-lived secret exchanged for it.
 
 ## 0. Install the API deps
 
-`01-monorepo-setup.md` scaffolded `apps/api` with the Hono CLI (which added
-`hono`) but deliberately did **not** pre-bake the domain deps — they land here
-with the code that uses them. `02-database-setup.md` already installed
-`drizzle-orm` / `drizzle-kit` / `@neondatabase/serverless`. From the repo root:
+### Assumes
+
+`01-monorepo-setup.md` produced `apps/api` (Hono scaffold, Bun, TS), and
+`02-database-setup.md` produced the Neon DB + `drizzle-orm`/`drizzle-kit`/
+`@neondatabase/serverless` in `apps/api`.
+
+### Do
+
+This step is built. The domain deps were deliberately not pre-baked in 01; they
+landed here with the code that uses them:
 
 ```sh
-pnpm --filter @ctrluhr/api add better-auth resend openai jose @hono/zod-validator
+pnpm --filter @ctrluhr/api add better-auth @better-auth/drizzle-adapter resend jose @hono/zod-validator dotenv
 ```
 
-Verify `apps/api/node_modules` now contains `hono`, `better-auth`, `resend`,
-`openai`, `jose`, `drizzle-orm`, `@neondatabase/serverless`.
+`pnpm install` from the root afterwards to link the workspace `@ctrluhr/schema`
+package (its `main` points straight at `src/index.ts`, so no build step).
+
+Two deps are present but **inert in phase 0** — don't reach for them:
+
+- `openai` — installed for the original server-side categorizer, superseded by
+  ADR-0002. It stays installed (the SDK is used in phase 2's browser-mediated
+  work) but phase 0 never calls it. `OPENAI_API_KEY` in `.env.example` is a placeholder.
+- `@hono/zod-validator` — a convenience for validating route bodies. Phase 0's
+  events route parses with `safeParse` from the schema package instead; the
+  validator is there if you want it on other routes.
+
+### Verify
+
+```sh
+pnpm --filter @ctrluhr/api typecheck
+```
+
+Expected: `tsc --noEmit` exits 0 with no output. If TypeScript can't resolve a
+package, `pnpm install` from the root is the fix.
+
+```sh
+ls apps/api/node_modules/hono apps/api/node_modules/better-auth apps/api/node_modules/@better-auth/drizzle-adapter apps/api/node_modules/resend apps/api/node_modules/jose apps/api/node_modules/drizzle-orm apps/api/node_modules/@neondatabase/serverless apps/api/node_modules/@hono/zod-validator
+```
+
+Expected: eight directory names printed, no `ls: cannot access` lines.
+
+### Produces
+
+`apps/api/package.json` carries the runtime deps; `apps/api/node_modules` is populated.
+
+---
 
 ## 1. The DB client
 
+### Assumes
+
+§0's Produces (deps present). `02-database-setup.md` produced the
+`apps/api/.env` file with a `DB_URL` connection string.
+
+### Read first
+
+1. **Drizzle — neon-http driver** — https://orm.drizzle.team/docs/get-started/neon-new
+   The `drizzle({ client })` constructor shape. The "driver" section shows why
+   `neon-http` (HTTP over the Postgres wire) is the right fit for Bun and edge.
+2. **Drizzle — schema definition** — https://orm.drizzle.team/docs/sql-schema-declaration
+   Skim only: the repo's tables are declared in `src/schema/*` (from 02), and
+   `lib/db.ts` just binds the driver to that schema.
+
+### Do
+
 ### `apps/api/src/lib/db.ts`
 
-```ts
-import { neon } from '@neondatabase/serverless';
-import { drizzle } from 'drizzle-orm/neon-serverless';
-import * as schema from '../schema';
+Built in this exact shape — the file is the repo truth, and two details in it
+are deliberate:
 
-const connectionString = process.env.DATABASE_URL!;
+- **`drizzle-orm/neon-http`, not `neon-serverless`.** In current drizzle-orm the
+  HTTP driver lives at `drizzle-orm/neon-http`; the older `neon-serverless`
+  subpath was removed. This repo pins `drizzle-orm@1.0.0-rc.4`, so the rc's
+  current subpaths are what matter — check `node_modules/drizzle-orm/` if it ever
+  changes, the official docs stay the source of truth.
+- **No `schema` binding.** drizzle-orm 1.0 dropped the `drizzle(sql, { schema })`
+  second argument; `drizzle({ client })` is the whole constructor. better-auth's
+  `drizzleAdapter` receives the schema map separately (see §3.4). Don't try to
+  re-add the schema argument — it's gone.
+- **`DB_URL`, not `DATABASE_URL`.** The repo standardised on `DB_URL` in
+  `.env.example`, `lib/db.ts`, and `drizzle.config.ts`. (Doc 02 still shows
+  `DATABASE_URL` inline in its examples — see the adjudication list at the end.)
+
+#### Reference — what the file is
+
+```ts
+// apps/api/src/lib/db.ts — REFERENCE ONLY
+import { neon } from '@neondatabase/serverless';
+import { drizzle } from 'drizzle-orm/neon-http';
+
+const connectionString = process.env.DB_URL!;
+
 const sql = neon(connectionString);
-export const db = drizzle(sql, { schema });
+export const db = drizzle({ client: sql });
 export type DB = typeof db;
 ```
 
-Why neon-serverless driver:
-- Uses HTTP (or fetch) over Postgres wire — works perfectly in Bun and edge.
-- Pool-able via `Pool` from the same package if you need more throughput. For
-  dev we use the simple `neon()` query function.
+### Verify
 
-## 2. The schema package (`packages/schema`)
+```sh
+bun --env-file=apps/api/.env -e "import { db } from './apps/api/src/lib/db.ts'; console.log('db ok', typeof db.select);"
+```
 
-The single source of truth for the wire format. Everything else (Hono
-validation, web client types, daemon JSON schema) is generated FROM here.
+Expected: `db ok function`. If it throws, the driver subpath changed or `DB_URL`
+isn't reachable from `.env`.
+
+### Produces
+
+`apps/api/src/lib/db.ts` (exists already) — the shared Drizzle client used by
+every route and by §3.4's `drizzleAdapter`.
+
+---
+
+## 2. The schema package
+
+### Assumes
+
+§0's Produces. `packages/schema` is a workspace package (`pnpm-workspace.yaml`
+covers `packages/*`), wired as a dependency of `apps/api`.
+
+### Do
 
 ### `packages/schema/src/event.ts`
 
+The single source of truth for the wire format between the daemon and the API.
+Everything else — Hono validation, the daemon's JSON, later the web client — is
+generated from here. Built exactly as below.
+
+Two things worth understanding:
+
+- **The event `id` is caller-generated.** `z.string().uuid()` because the daemon
+  generates event ids at emission time and the API's idempotent insert keys on
+  them (ADR-0006: ids are `text` in the DB, supplied by the caller, never
+  `gen_random_uuid()`). The DB column is `text`; a UUID string is text.
+- **`EventReceiptSchema` is the per-event result** the API returns. In phase 0
+  `category_id` is always `null` — nothing categorizes events yet (§7). The
+  field stays in the wire type so the daemon's local-state bookkeeping doesn't
+  change when categorization lands.
+
+#### Reference — what the files are
+
 ```ts
+// packages/schema/src/event.ts — REFERENCE ONLY
 import { z } from 'zod';
 
 /** A single activity window observed by the daemon. */
@@ -93,148 +219,128 @@ export const EventReceiptSchema = z.object({
 export type EventReceipt = z.infer<typeof EventReceiptSchema>;
 ```
 
-### `packages/schema/src/index.ts`
-
 ```ts
+// packages/schema/src/index.ts — REFERENCE ONLY
 export * from './event';
 ```
 
-### Re-install (pick up the new schema package)
+### Verify
 
 ```sh
-pnpm install
+bun -e "import { ActivityEventSchema, EventBatchSchema, EventReceiptSchema } from './packages/schema/src/index.ts'; const ok = EventBatchSchema.safeParse({ events: [{ id: crypto.randomUUID(), app_name: 'Code', window_title: 'writing docs', started_at: new Date().toISOString(), ended_at: new Date().toISOString() }] }); console.log('schema ok', ok.success);"
 ```
 
-## 3. better-auth setup
+Expected: `schema ok true`. A batch with a valid event parses.
 
-better-auth runs as its own module in `apps/api/src/auth.ts`. The web app
-talks to it through the `better-auth/client` SDK (covered in `04-web-setup.md`).
-The API mounts the handler at `/auth/*` (Hono routes everything else).
+### Pitfalls
 
-The official docs are the source of truth — don't trust this section over
-them. This section just decides *which* docs to read and *in what order*,
-because the better-auth site is huge and easy to get lost in.
+- `pnpm --filter @ctrluhr/schema typecheck` **fails** — `packages/schema` has no
+  `tsconfig.json`, so its own `tsc --noEmit` script can't run (tsc prints help
+  and exits 1). The package is consumed as raw TS by Bun, which doesn't need one.
+  Adding a `tsconfig.json` is a code-fix ticket, not a doc change (adjudication list).
+
+### Produces
+
+`packages/schema/src/event.ts` + `src/index.ts` (exist already) — `ActivityEventSchema`,
+`EventBatchSchema`, `EventReceiptSchema` and their types.
+
+---
+
+## 3. better-auth magic link
+
+better-auth runs as its own module, `apps/api/src/auth.ts`. The web app talks to
+it through the `better-auth/client` SDK (that's `04-web-setup.md`); the API
+mounts its handler at `/auth/*` (that's §4). Sections 3.1–3.5 are built —
+read them to learn the shape, then check §3.6's Verify to confirm your checkout
+matches.
 
 ### 3.1 Read these in order
 
-Walk through the docs in this order. Each one is short, and they link to
-each other, so ~15 minutes total:
+Walk these in order; each is short and they link to each other (~20 minutes total):
 
 1. **Installation** — https://www.better-auth.com/docs/installation
-   Covers the `auth.ts` shape, env vars, database wiring, and the Hono
-   handler snippet (which is exactly what we'll use in §4).
+   The `auth.ts` shape, env vars, database wiring, and the Hono handler snippet
+   (the mount pattern we use in §4).
 2. **Drizzle ORM Adapter** — https://www.better-auth.com/docs/adapters/drizzle
-   This is what glues better-auth to your Drizzle schema. Read the
-   "Modifying Table Names" and "Schema generation & migration" sections
-   — both matter for us.
+   Read the "Modifying Table Names" and "Schema generation & migration" sections
+   — both matter here.
 3. **Magic Link plugin** — https://www.better-auth.com/docs/plugins/magic-link
-   This is the auth method. The whole reason for this section. Read the
-   "Installation" (server) and "Configuration Options" sections. Ignore
-   the client plugin for now — that's `04-web-setup.md`.
+   The auth method. Read "Installation" (server) and "Configuration Options"
+   (especially `sendMagicLink`'s callback args). Ignore the client plugin — that's 04.
 4. **CLI** — https://www.better-auth.com/docs/concepts/cli
-   Specifically the `generate` command. This is what reconciles better-auth's
-   required columns with your Drizzle schema in §3.5.
-5. **Basic Usage → Server-Side `getSession`** — https://www.better-auth.com/docs/basic-usage#server-side
-   Bookmarks the exact API we use in `lib/session.ts` (§5).
+   The `generate` command — what reconciles better-auth's required columns with
+   our Drizzle schema in §3.5.
+5. **Basic Usage → Server-side `getSession`** — https://www.better-auth.com/docs/basic-usage
+   The exact API `lib/session.ts` calls in §5.3.
 
-Don't read the rest yet (social providers, 2FA, organizations, etc.) — none
-of it applies to phase 0.
+Don't read social providers, 2FA, organizations — none of it applies to phase 0.
 
-### 3.2 Install
+### 3.2 Install the Drizzle adapter
 
-The install command in §0 already added `better-auth`. The Drizzle adapter
-is a separate package in recent better-auth versions — check which one your
-installed `better-auth` version expects by looking at
-`node_modules/better-auth/dist/adapters/` (or `@better-auth/drizzle-adapter/`
-if that exists):
+The adapter is a separate package for current better-auth versions:
 
 ```sh
-# if node_modules/@better-auth/drizzle-adapter exists:
 pnpm --filter @ctrluhr/api add @better-auth/drizzle-adapter
-
-# if node_modules/better-auth/dist/adapters/drizzle exists, skip — it's bundled
 ```
 
-The official docs say `@better-auth/drizzle-adapter` is the way going forward,
-but older versions still ship the adapter inline at `better-auth/adapters/drizzle`.
-Use whichever import path your version actually exports.
+Verify it landed: `ls apps/api/node_modules/@better-auth/drizzle-adapter`.
+(If your version ships the adapter bundled instead, the official adapter docs
+show the correct import path — code wins.)
 
 ### 3.3 Env vars
 
-The official docs name two required env vars (see Installation page):
+The official Installation docs name two required env vars; both are already in
+`apps/api/.env.example` and `apps/api/.env`:
 
-- `BETTER_AUTH_SECRET` — random 32+ char string. Generate with
-  `openssl rand -base64 32`. The docs also have a "Generate Secret" button.
-- `BETTER_AUTH_URL` — base URL of the API (in dev: `http://localhost:3000`).
+- `BETTER_AUTH_SECRET` — random 32+ char string (`openssl rand -base64 32`). We
+  also reuse it as the Device Key HMAC secret in §5.4 — one high-entropy secret,
+  don't mint a second.
+- `BETTER_AUTH_URL` — base URL of the API: `http://localhost:3000` in dev.
+  The handler reads it automatically. (An earlier draft used `BETTER_AUTH_BASE_URL`
+  — that var is wrong; it's `BETTER_AUTH_URL`.)
 
-Add both to `apps/api/.env` (and `apps/api/.env.example` so the team knows).
-The Hono mount in §4 doesn't need anything else from better-auth; it picks
-up `BETTER_AUTH_URL` automatically via `auth.handler`.
+Plus Resend:
 
-> Heads up: this file's earlier draft used `BETTER_AUTH_BASE_URL`. That's
-> wrong — the env var is `BETTER_AUTH_URL`. The `baseURL` *config option*
-> on the `betterAuth({...})` call is a different thing; you usually don't
-> need to set it because the env var is read automatically.
-
-You'll also need `RESEND_API_KEY` (from https://resend.com/api-keys) and
-optionally `RESEND_FROM_EMAIL` (defaults to Resend's sandbox sender, which
-only delivers to your Resend-account email — perfect for phase 0 dev).
+- `RESEND_API_KEY` — from https://resend.com/api-keys.
+- `RESEND_FROM_EMAIL` — required here (the built `auth.ts` non-null-asserts it).
+  In dev use Resend's sandbox sender `onboarding@resend.dev`, which only
+  delivers to the email on your Resend account — that's fine, that's your test inbox.
 
 ### 3.4 Create `apps/api/src/auth.ts`
 
-By now you've read the five doc pages above. Write the file by following
-them — the structure should fall out naturally:
+By now you've read the five pages in 3.1. The file exists — read it and confirm
+you understand each choice, then compare against the reference:
 
-- Import `betterAuth` and `magicLink` (paths per the docs for your version).
-- Import the Drizzle adapter from whichever path your version exposes.
-- Pass the adapter with `provider: 'pg'` and the `schema` mapping.
-  Because our Drizzle tables are named `users` / `sessions` / `verifications`
-  (plural), use the "Modifying Table Names" pattern from the Drizzle adapter
-  docs to map better-auth's default `user` / `session` / `verification` to
-  our `users` / `sessions` / `verifications` tables.
-- Set `emailAndPassword: { enabled: false }` — magic link only.
-- Add the `magicLink` plugin with a `sendMagicLink` callback that calls
-  `resend.emails.send({...})`. The `url` arg is the full link the user
-  clicks (better-auth appends the token as a query param) — see the
-  Magic Link plugin docs for the exact shape of the callback args.
-- `export const auth = betterAuth({...})` and `export type Auth = typeof auth`.
+- `drizzleAdapter(db, { provider: 'pg', schema: { user, session, verification } })`
+  — maps better-auth's singular table names to our plural Drizzle tables via the
+  "Modifying Table Names" pattern. The schema map goes **here**, not in `lib/db.ts`
+  (§1), because drizzle-orm 1.0 removed schema binding from the constructor.
+- `emailAndPassword: { enabled: false }` — magic link only.
+- `magicLink({ sendMagicLink })` — the callback sends the URL via Resend. Note
+  it returns without awaiting `resend.emails.send(...)`: the email is fire-and-
+  forget from better-auth's perspective; the magic-link *token row* is what the
+  schema-sync regression test in §3.5 asserts on.
 
-#### Reference — what the end file should look like
-
-This is what the finished file should resemble *after* you write it by
-following the steps above. **Do not copy this verbatim** — the import
-paths and option names change between better-auth versions, and the docs
-are always more current than this snapshot. Use this to sanity-check that
-yours has the same shape, options, and side-effects:
+#### Reference — what the file is
 
 ```ts
 // apps/api/src/auth.ts — REFERENCE ONLY
-// Write this by following §3.1 docs, then compare against this.
-
+import { drizzleAdapter } from '@better-auth/drizzle-adapter';
 import { betterAuth } from 'better-auth';
 import { magicLink } from 'better-auth/plugins';
-import { drizzleAdapter } from '<per-docs-for-your-version>';  // see §3.2
+import { Resend } from 'resend';
 import { db } from './lib/db';
 import * as schema from './schema';
-import { Resend } from 'resend';
 
 const resend = new Resend(process.env.RESEND_API_KEY!);
 
 export const auth = betterAuth({
-  database: drizzleAdapter(db, {
-    provider: 'pg',
-    schema: {
-      user: schema.users,
-      session: schema.sessions,
-      verification: schema.verifications,
-    },
-  }),
-  emailAndPassword: { enabled: false },       // magic link only
+  emailAndPassword: { enabled: false },
   plugins: [
     magicLink({
-      sendMagicLink: async ({ email, url }) => {
-        const from = process.env.RESEND_FROM_EMAIL ?? 'ctrluhr <onboarding@resend.dev>';
-        await resend.emails.send({
+      sendMagicLink: async ({ email, token, url, metadata }, ctx) => {
+        const from = process.env.RESEND_FROM_EMAIL!;
+        resend.emails.send({
           from,
           to: email,
           subject: 'Sign in to ctrluhr',
@@ -243,126 +349,184 @@ export const auth = betterAuth({
       },
     }),
   ],
+  database: drizzleAdapter(db, {
+    provider: 'pg',
+    schema: {
+      user: schema.users,
+      session: schema.sessions,
+      verification: schema.verifications,
+    },
+  }),
 });
 
 export type Auth = typeof auth;
 ```
 
-### 3.5 Sync the schema
+### 3.5 Sync the schema — mandatory (ADR-0006)
 
-better-auth may want a few extra columns on `users` / `sessions` /
-`verifications` (e.g. `emailVerified`, `image`, `expiresAt`, `token`,
-`identifier`). Run the CLI's `generate` command (per the CLI docs) to see
-what it expects:
+**This step is not optional.** Its Verify is the project's regression test for
+"auth and schema are in sync." Skipping it is how ADR-0006 happened.
+
+better-auth expects specific columns on `users` / `sessions` / `verifications`
+(e.g. `image` on users, `identifier`/`value`/`expires_at` on verifications).
+The repo's hand-written schema files were already reconciled to that shape — this
+step is the *mechanism*, so you know how to re-run it when the library changes.
+
+**Do**
+
+1. Run the CLI's `generate` to a scratch file and diff it against our hand-written
+   schema. The CLI writes its own `auth-schema.ts` — a throwaway reference, never
+   part of our tree:
+
+   ```sh
+   cd apps/api
+   pnpm dlx auth@latest generate --config src/auth.ts --output /tmp/auth-schema.ts --yes
+   ```
+
+   `pnpm dlx`, not `pnpm exec` — `pnpm exec` resolves a *local* package and won't
+   find the on-demand CLI (real error below). The flags change between versions;
+   always check the CLI page in 3.1.
+
+2. Compare the generated columns to `src/schema/{users,sessions,verifications}.ts`
+   and reconcile **our** files, adding anything better-auth now needs. Do not keep
+   the generated file — delete it after the diff. (ADR-0006: it's re-generated
+   for diffs, not kept in the tree.)
+3. If anything changed, run the migration flow from 02. Note the commands target
+   `@ctrluhr/api` (where `drizzle.config.ts` and `drizzle-kit` live), not a
+   non-existent `@ctrluhr/db`:
+
+   ```sh
+   cd apps/api
+   pnpm exec drizzle-kit generate
+   pnpm exec drizzle-kit push
+   ```
+
+   (`pnpm exec drizzle-kit` is right here — drizzle-kit IS a local package.)
+
+**Why it matters:** better-auth writes `sessions`/`verifications` rows on every
+login. If our columns drift from what better-auth's client emits, the magic link
+fails at the database — not with a friendly error, but with Postgres's raw type
+error. That's exactly the class of bug this Verify exists to catch.
+
+**Verify**
 
 ```sh
-pnpm dlx auth@latest generate --config src/auth.ts --output src/schema --yes
+cd apps/api
+bun test-resend.ts
 ```
 
-(`pnpm exec` resolves a *local* package and won't find the CLI; use
-`pnpm dlx` or `npx`. The command name and flags change — always check
-the current CLI docs at https://www.better-auth.com/docs/concepts/cli.
-Older docs called the package `@better-auth/cli`; current docs use the
-unscoped `auth` package.) See ADR-0006 for why this step is not optional.
+This is `apps/api/test-resend.ts` — the magic-link smoke test. It calls
+`auth.api.signInMagicLink` and compares `verifications` row counts before and
+after. It needs a working `.env` (DB + Resend + `SMOKE_TEST_EMAIL`), which is
+why it lives outside `src/` with the `SMOKE_TEST_EMAIL` placeholder in
+`.env.example`.
 
-It'll print a Drizzle schema diff. Compare each table to your
-`apps/api/src/schema/{users,sessions,verifications}.ts` and add the missing
-columns. Then re-run your normal migration flow:
+Expected: it logs an object like `{ status: ..., rows: { before: 0, after: 1, latest: {...} } }` —
+`rows.after` greater than `rows.before`, and `latest` is a new `verifications` row.
+If the schema drifted, this throws with the `22P02` error below.
 
-```sh
-pnpm --filter @ctrluhr/db drizzle-kit generate
-pnpm --filter @ctrluhr/db drizzle-kit push
-```
+**Pitfalls**
 
-This is a one-time chore. After this, better-auth reads/writes those
-columns and you'll rarely touch them again.
+- `22P02 invalid input syntax for type uuid: <32-char hex>` — the ADR-0006
+  failure. A uuid column is receiving better-auth's text id. Fix: the column is
+  `text` (the migration in 02's §3 applied `ALTER COLUMN ... TYPE text`), never
+  `uuid`. If this error reappears after a schema regen, §3.5 was skipped.
+- `pnpm exec auth@latest generate` fails to find the CLI — expected: `exec`
+  resolves local packages. Use `pnpm dlx auth@latest generate` (or `npx …`).
+- The generated `auth-schema.ts` must not be committed — it's a diff target.
+  ADR-0006 dropped it from the tree after the migration applied.
 
 ### 3.6 What you should be able to do now
 
-Without writing any more code, you can sanity-check the install:
+**Verify**
 
-- `bun run apps/api/src/auth.ts` should *not* throw at import time. If it
-  does, the error message will tell you what's missing (env var, column,
-  import path).
-- The CLI in §3.5 should generate a clean diff (i.e. after applying it,
-  re-running produces no further changes).
+```sh
+bun --env-file=apps/api/.env -e "import { auth } from './apps/api/src/auth.ts'; console.log('auth ok', typeof auth.handler);"
+```
 
-If both pass, you're done with section 3. Move to §4 to mount the handler.
+Expected: `auth ok function`. A thrown error at import time tells you what's
+missing (env var, column, import path).
+
+```sh
+cd apps/api && pnpm dlx auth@latest generate --config src/auth.ts --output /tmp/auth-schema.ts --yes
+rg -n "image" src/schema/users.ts
+rg -n "token|type" src/schema/verifications.ts
+```
+
+Expected: the generate succeeds; `users.ts` shows an `image` column; the
+`verifications.ts` check prints nothing (the `token`/`type` columns were dropped
+by the ADR-0006 migration). A match on the second `rg` is the drift ADR-0006
+caught — don't proceed until it's gone. The real end-to-end signal is the §3.5
+smoke test.
+
+### Produces
+
+`apps/api/src/auth.ts` and `src/schema/{users,sessions,verifications}.ts` (exist
+already), plus `apps/api/test-resend.ts` as the auth↔schema regression test.
+
+---
 
 ## 4. Hono bootstrap
 
-This is mostly library wiring — the file is small and the only logic in
-it is "mount the better-auth handler at `/auth/*`, mount the rest of the
-routes, add a couple of middlewares." Read the Hono docs first, then
-write it.
+This is the first plan-first step. `src/index.ts` is still the hello-world
+scaffold from 01. Everything from here is verified against official docs and the
+ADRs, not against code.
 
-### 4.1 Read these in order
+### Assumes
 
-1. **Getting Started** — https://hono.dev/docs/getting-started/basic
-   Covers the `new Hono()` → `app.get(...)` → `export default app` shape
-   and the request/response helpers (`c.json`, `c.text`, `c.req.query`,
-   `c.req.param`). All of it applies to us.
-2. **Middleware concepts** — https://hono.dev/docs/concepts/middleware
-   Specifically the "Writing your own middleware" and `c.set` / `c.get`
-   bits — we use those heavily in §5.
-3. **CORS middleware** — https://hono.dev/docs/middleware/builtin/cors
-   We mount CORS before routes so better-auth's cookie-based auth works
-   from the web app on a different origin (`5173` → `3000`). Pay attention
-   to the `credentials: true` option — without it, the browser drops the
-   session cookie on cross-origin requests.
-4. **Logger middleware** — https://hono.dev/docs/middleware/builtin/logger
-   Optional but useful in dev. Disable in prod or you'll spam your logs.
-5. **Routing — `app.route()` for sub-routers** — https://hono.dev/docs/concepts/routers
-   We split the API into per-resource sub-apps (`eventsRoute`,
-   `devicesRoute`, `analyticsRoute`) and mount each one with `app.route`.
-   The "Grouping routes" section covers the pattern.
+- §3's Produces: `src/auth.ts` exists and the §3.6 import check passes.
+- §0's Produces: `hono` and friends are installed.
+- `bun run dev` from `apps/api` currently boots the hello-world app (the script
+  is `bun run --hot src/index.ts`).
 
-### 4.2 Bun's entry point
+### Read first
 
-The Hono docs show `export default app` — that's the Worker/Deno/Cloudflare
-shape. **Bun is different**: it expects `{ port, fetch }` so `Bun.serve` can
-pick it up. From the Bun docs (https://bun.sh/docs/runtime/http#bun-serve):
+1. **Hono — Getting Started** — https://hono.dev/docs/getting-started/basic
+   The `new Hono()` → `app.get()` shape and request/response helpers. All of it applies.
+2. **Hono — Concepts: middleware** — https://hono.dev/docs/concepts/middleware
+   "Writing your own middleware" and `c.set`/`c.get` — used heavily in §5.
+3. **Hono — CORS middleware** — https://hono.dev/docs/middleware/builtin/cors
+   Cross-origin cookies: `credentials: true` is what lets the web app on `:5173`
+   hold the session cookie set by the API on `:3000`. Without it the browser
+   drops the cookie and `getSession` always returns null.
+4. **Hono — Concepts: routers** — https://hono.dev/docs/concepts/routers
+   "Grouping routes" — how `eventsRoute`/`devicesRoute`/`analyticsRoute` mount.
+5. **better-auth — Hono integration** — https://www.better-auth.com/docs/integrations/hono
+   The correct way to mount the auth handler — read before writing, see below.
+6. **Bun — HTTP server** — https://bun.sh/docs/runtime/http
+   The "export default syntax" section. Hono's docs show `export default app`
+   (Worker/Deno shape); **Bun is different** — it wants `{ port, fetch }` so
+   `Bun.serve` picks it up. Don't paste the Worker default export blindly.
 
-```ts
-export default {
-  port: 3000,
-  fetch: app.fetch,
-};
-```
+### Do
 
-Don't paste the Hono docs' `export default app` blindly — read the Bun
-section too, otherwise `bun run src/index.ts` will silently fail or print
-a confusing runtime error.
+### Write `apps/api/src/index.ts`
 
-### 4.3 Write `apps/api/src/index.ts`
+Walk the file mentally before writing:
 
-By now the shape should be obvious. Walk through the file mentally:
+- One `app = new Hono()`.
+- `app.use('*', logger())` — dev only; fine as-is for phase 0.
+- `app.use('*', cors({ origin: process.env.WEB_ORIGIN ?? 'http://localhost:5173', credentials: true }))`
+  — origin from `WEB_ORIGIN` so prod config never needs a code change.
+- `app.get('/healthz', c => c.json({ ok: true }))` — liveness, no auth.
+- **Mount better-auth with `app.on`, not `app.route`.** The handler is a plain
+  fetch handler, not a Hono app; per the integration docs:
 
-- Import `Hono`, `cors`, `logger`, your `auth` instance from §3, and the
-  three sub-routers from §6–§8 (we haven't written them yet — import them
-  as you create them; TS will yell at you if you reference a missing
-  module).
-- Create one `app = new Hono()`.
-- `app.use('*', logger())` — dev only; gate it on `NODE_ENV !== 'production'`
-  or just live with it for now.
-- `app.use('*', cors({ origin, credentials: true }))` — origin defaults to
-  the web dev URL; pull from `process.env.WEB_ORIGIN` so prod config doesn't
-  require code changes.
-- `app.get('/healthz', c => c.json({ ok: true }))` — no auth, no nothing.
-  This is your liveness probe.
-- `app.route('/auth', auth.handler)` — better-auth's handler is itself a
-  Hono-compatible fetch. Mounting it at `/auth` means all of better-auth's
-  routes (`/auth/sign-in/magic-link`, `/auth/get-session`, etc.) are
-  reachable.
-- `app.route('/events', eventsRoute)` / `/devices` / `/analytics` — mount
-  each sub-router from §6–§8.
-- `export default { port, fetch: app.fetch }` — Bun entry point.
+  ```ts
+  app.on(['POST', 'GET'], '/auth/*', (c) => auth.handler(c.req.raw));
+  ```
 
-#### Reference — what the end file should look like
+  This reaches better-auth's routes as `/auth/sign-in/magic-link`, `/auth/get-session`, etc.
+- Mount the three sub-routers with `app.route('/events', eventsRoute)` (etc.).
+  You haven't written them yet (§6–§8) — add each import as you create the file,
+  TS will yell at you until the module exists.
+- `export default { port, fetch: app.fetch }` — the Bun entry point.
+
+#### Reference — the target shape
 
 ```ts
 // apps/api/src/index.ts — REFERENCE ONLY
-// Write by following §4.1 + §4.2, then compare against this.
+// Write by following the Read first list, then compare against this.
 
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
@@ -384,7 +548,9 @@ app.use(
 );
 
 app.get('/healthz', (c) => c.json({ ok: true }));
-app.route('/auth', auth.handler);
+
+app.on(['POST', 'GET'], '/auth/*', (c) => auth.handler(c.req.raw));
+
 app.route('/events', eventsRoute);
 app.route('/devices', devicesRoute);
 app.route('/analytics', analyticsRoute);
@@ -393,62 +559,69 @@ const port = Number(process.env.PORT ?? 3000);
 export default { port, fetch: app.fetch };
 ```
 
-### 4.4 Sanity check
+### Verify
 
-Before moving to §5, confirm:
+```sh
+cd apps/api && bun run dev
+```
 
-- `bun run apps/api/src/index.ts` boots without error and prints a
-  "Listening on http://localhost:3000" line (or similar).
-- `curl http://localhost:3000/healthz` returns `{"ok":true}`.
-- `curl http://localhost:3000/auth/get-session` returns a JSON session
-  object (probably `{ data: null, error: null }` for an unauthenticated
-  request). This proves the better-auth mount is wired correctly.
+In another terminal:
 
-If any of those fail, the bug is in how `auth.handler` is mounted or how
-`app.route` was called — re-check the Hono routing docs. Don't move on
-to §5 with a broken bootstrap.
+```sh
+curl -s http://localhost:3000/healthz
+```
+
+Expected: `{"ok":true}`.
+
+```sh
+curl -s http://localhost:3000/auth/get-session
+```
+
+Expected: `{"data":null,"error":null}` for an unauthenticated request. A different
+shape (or a 404) means the handler mount is wrong — re-read the better-auth Hono
+page and the `app.on` pattern. Don't move to §5 with a broken bootstrap.
+
+### Produces
+
+`apps/api/src/index.ts` — boots Hono on `:3000` with healthz + auth mounted.
+
+---
 
 ## 5. Auth middlewares
 
-Two middlewares do the auth work, plus one tiny helper to keep them
-type-safe across the app. This section is mostly our own logic — the
-library surface is small (Hono middleware shape, jose for JWT, better-auth
-for the session lookup). Read the linked docs for each, then write the
-files by reasoning about what each one needs to do.
+Two middlewares do the auth work, plus one tiny factory for typed Hono instances.
+This section is mostly our own business logic — the library surface is small
+(Hono middleware shape, jose, better-auth `getSession`).
 
-### 5.1 Read these in order
+### Assumes
 
-1. **Hono — typed `Variables` via the generic** — https://hono.dev/docs/concepts/middleware#context
-   The `c.set('userId', ...)` / `c.get('userId')` pattern with typed
-   `Variables` is what makes the middlewares below type-safe end-to-end.
-   Read the "Custom Middleware" section specifically.
-2. **jose — `SignJWT` and `jwtVerify`** — https://github.com/panva/jose#jwt-signing-and-verification
-   jose is the de-facto JWT lib for TS/Bun. The "JWT signing" section
-   shows the `SignJWT` builder, the "Verification" section shows
-   `jwtVerify` with issuer/audience checks. We use HS256 (symmetric)
-   because we already have a shared secret — no need for asymmetric key
-   management in phase 0.
-3. **better-auth — `auth.api.getSession`** — https://www.better-auth.com/docs/basic-usage#server-side
-   Already linked in §3. Bookmarked here because `lib/session.ts` is where
-   you actually call it.
+§4's Produces (the server boots). §0's Produces (`jose` installed). No routes
+exist yet — that's fine, these are libraries waiting to be consumed.
 
-### 5.2 `lib/hono-factory.ts` — typed Hono instances
+### Read first
 
-Every per-resource sub-router (`eventsRoute`, `devicesRoute`,
-`analyticsRoute`) is a `Hono` instance that needs the same typed
-`Variables` so `c.get('userId')` returns a `string`, not `unknown`. The
-factory centralises the generic. One file, ten lines. Read the Hono
-middleware docs to understand what the generic controls, then write it
-yourself — there's nothing to learn from copying it.
+1. **Hono — typed `Variables` via the generic** — https://hono.dev/docs/concepts/middleware
+   The `c.set('userId', ...)` / `c.get('userId')` pattern with typed `Variables`
+   is what makes the middlewares type-safe end-to-end.
+2. **jose — JWT signing and verification** — https://github.com/panva/jose
+   The `SignJWT` builder chain and `jwtVerify` with `issuer`/`audience` options.
+   We use HS256 (symmetric) because we already share a secret — no asymmetric
+   key management in phase 0.
+3. **better-auth — `getSession`** — https://www.better-auth.com/docs/basic-usage
+   Bookmarked from §3.1; `lib/session.ts` is where you actually call it.
 
-#### Reference — what the end file should look like
+### 5.1 `lib/hono-factory.ts` — typed Hono instances
+
+Every per-resource router needs the same typed `Variables` so `c.get('userId')`
+returns `string`, not `unknown`. The factory centralises the generic. Write it
+yourself after reading the middleware doc — it's ten lines and copying teaches you nothing.
+
+#### Reference — target shape
 
 ```ts
 // apps/api/src/lib/hono-factory.ts — REFERENCE ONLY
-
 import { Hono } from 'hono';
 
-/** Hono instance preconfigured with the types we use everywhere. */
 export function createHono() {
   return new Hono<{
     Variables: {
@@ -459,27 +632,22 @@ export function createHono() {
 }
 ```
 
-### 5.3 `lib/session.ts` — browser session middleware
+### 5.2 `lib/session.ts` — browser session middleware
 
-`requireUser` is a Hono sub-app that runs `auth.api.getSession`, populates
-`userId` and `user`, and 401s if there's no session. The shape follows
-the Hono "Custom Middleware" doc verbatim — the only domain-specific bit
-is which `c.set(...)` keys we populate. Use §3.1's better-auth `getSession`
-doc to confirm the call shape.
+`requireUser` is a Hono sub-app whose middleware runs `auth.api.getSession`,
+sets `userId`, and 401s on a missing session. The shape follows the Hono
+"Custom Middleware" doc verbatim; the only domain bit is which keys we set.
 
-A subtle thing worth getting right the first time: the session is in a
-cookie. The cookie was set by better-auth on the API origin (`:3000`).
-When the web app on `:5173` calls `:3000`, the browser sends the cookie
-because Hono's CORS in §4 set `credentials: true`. If you find `getSession`
-returns `null` even after a successful login, the issue is in §4's CORS,
-not here. Don't re-derive the session-lookup logic — re-read the better-auth
-CORS / cookies section.
+The subtle part to get right the first time: the session is a cookie set by
+better-auth on the API origin (`:3000`). When the web app on `:5173` calls
+`:3000`, the browser sends it only because §4's CORS has `credentials: true`.
+If `getSession` returns null after a successful login, the bug is in §4's CORS,
+not here — don't re-derive the session logic.
 
-#### Reference — what the end file should look like
+#### Reference — target shape
 
 ```ts
 // apps/api/src/lib/session.ts — REFERENCE ONLY
-
 import { createHono } from './hono-factory';
 import { auth } from '../auth';
 
@@ -488,43 +656,32 @@ export const requireUser = createHono();
 requireUser.use('*', async (c, next) => {
   const session = await auth.api.getSession({ headers: c.req.raw.headers });
   if (!session) return c.json({ error: 'unauthorized' }, 401);
-  c.set('user', session.user);
   c.set('userId', session.user.id);
   await next();
 });
 ```
 
-### 5.4 `lib/device-jwt.ts` — sign + verify the device JWT
+### 5.3 `lib/device-jwt.ts` — sign + verify the Device Key
 
-Devices authenticate with a long-lived JWT signed by the API. The JWT
-carries `device_id` and `user_id`. The *enrollment* token (a one-time
-hex string the user copies to the daemon machine, see §6) is **not** the
-JWT — it's exchanged exactly once for a JWT, which then lives in the
-daemon's `~/.config/ctrluhr/config.toml` and is sent on every `/events`
-POST.
+Devices authenticate with a long-lived JWT (the **Device Key**) signed by the
+API. It carries `device_id` and `user_id`. The Enrollment Token (§6) is a
+different thing — a one-time hex string exchanged exactly once for this JWT,
+which then lives in the daemon's config and is sent on every `/events` POST.
 
-We reuse `BETTER_AUTH_SECRET` as the HMAC secret. That's intentional:
-it's already a high-entropy random 32+ byte string in `.env`, so we don't
-need a second secret to manage. Reuse the env var; don't generate a new
-one. The `iss` and `aud` claims distinguish a device JWT from a better-auth
-session cookie in case anything ever tries to verify the wrong one.
+Design points:
 
-Read the jose docs linked in §5.1 — specifically the `SignJWT` builder
-method chain and the `jwtVerify` options. The interesting knobs:
-- `alg: 'HS256'` — symmetric, same secret for sign and verify.
-- `iss: 'ctrluhr'`, `aud: 'ctrluhr-device'` — you must verify both
-  on the read side or you accept any JWT signed with your secret.
-- `iat` only — no `exp`. Revocation is not token-based: the
-  `requireDevice` middleware (§5.5) checks the device's status on every
-  batch (ADR-0005), so a revoked device gets 401 immediately. If you
-  want an expiry, set it; but then you need a refresh flow, which
-  isn't worth the complexity yet.
+- **Reuse `BETTER_AUTH_SECRET` as the HMAC secret** — it's already a high-entropy
+  32+ byte string; don't mint a second secret to manage.
+- **No `exp`.** Revocation is not token-based: `requireDevice` (§5.4) checks the
+  Device's status in the DB on every batch (ADR-0005), so a Revoked Device's key
+  dies immediately. An expiry would only add a refresh flow nobody needs.
+- **`iss`/`aud` claims distinguish a Device Key from anything else** signed with
+  the same secret — verify both on the read side or you accept any JWT.
 
-#### Reference — what the end file should look like
+#### Reference — target shape
 
 ```ts
 // apps/api/src/lib/device-jwt.ts — REFERENCE ONLY
-
 import { SignJWT, jwtVerify } from 'jose';
 
 const secret = new TextEncoder().encode(process.env.BETTER_AUTH_SECRET!);
@@ -549,26 +706,18 @@ export async function verifyDeviceJwt(token: string): Promise<{ deviceId: string
 }
 ```
 
-`jose` was already installed in §0. If you skipped that,
-`pnpm --filter @ctrluhr/api add jose` now.
+### 5.4 `lib/device-auth.ts` — Device Key middleware
 
-### 5.5 `lib/device-auth.ts` — middleware verifying the device JWT
+`requireDevice` is the device-side equivalent of `requireUser`: same shape, but
+it parses `Authorization: Bearer <jwt>`, verifies the signature, **and does one
+indexed DB read to check the Device's status** — a Revoked Device gets 401 on
+the very next batch (ADR-0005). That read is the whole point; it's what makes
+doc 00's "daemon gets 401 and halts" promise true.
 
-`requireDevice` is the device-side equivalent of `requireUser`. Same
-shape: a Hono sub-app, middleware that validates the bearer token, sets
-`userId` + `deviceId`, and 401s on any failure.
-
-The only domain-specific bits are the `Authorization: Bearer <jwt>` header
-parsing (there's no library magic here, it's a string slice) and the
-device-status check: one indexed read per request so a Revoked device gets
-401 immediately (ADR-0005). The verification call is `verifyDeviceJwt()`
-from §5.4. After §5.4 reads the jose docs, this file should be obvious.
-
-#### Reference — what the end file should look like
+#### Reference — target shape
 
 ```ts
 // apps/api/src/lib/device-auth.ts — REFERENCE ONLY
-
 import { eq } from 'drizzle-orm';
 import { createHono } from './hono-factory';
 import { verifyDeviceJwt } from './device-jwt';
@@ -603,106 +752,127 @@ requireDevice.use('*', async (c, next) => {
 });
 ```
 
-### 5.6 How the two middlewares are used
+### 5.5 How the two middlewares are used
 
-This is a good moment to read the Hono "Custom Middleware" doc end-to-end
-if you haven't already — specifically the part about chaining
-middlewares on a sub-app. Each per-resource router (§6, §7, §8) calls
-`app.use('*', requireUser)` or `app.use('*', requireDevice)` as its
-first line, then `c.get('userId')` / `c.get('deviceId')` in the handlers
-is fully typed and never undefined (the middleware 401s first if the
-caller isn't authed).
+Each per-resource router (§6, §7, §8) calls `app.use('*', requireUser)` or
+`app.use('*', requireDevice)` as its first line. Handlers then read
+`c.get('userId')` / `c.get('deviceId')` fully typed — the middleware 401s first,
+so the value is never undefined when a handler runs.
 
 If you find yourself writing `if (!userId) return c.json({ error: ... }, 401)`
-inside a handler, the middleware isn't wired right — fix that first.
+inside a handler, the middleware isn't wired right — fix that, don't patch the handler.
+
+### Verify
+
+```sh
+pnpm --filter @ctrluhr/api typecheck
+```
+
+Expected: `tsc --noEmit` exits 0 — the four new files type-check against the
+installed Hono/jose/better-auth versions. The 401 semantics get exercised once
+routes mount in §6/§7.
+
+### Produces
+
+`apps/api/src/lib/hono-factory.ts`, `session.ts`, `device-jwt.ts`,
+`device-auth.ts` — the typed factory and both auth middlewares.
+
+---
 
 ## 6. Devices routes
 
-This section is almost entirely our own business logic. The only library
-surface is Drizzle's query builder — read the docs for the few operations
-we use, then write the file by reasoning about the enrollment flow.
+Almost entirely our own business logic. The only library surface is Drizzle's
+query builder and Node's `crypto`.
 
-### 6.1 Read these in order
+### Assumes
 
-1. **Drizzle — Query Builder** — https://orm.drizzle.team/docs/select
-   Specifically: `db.select({...projection...}).from(table).where(predicate)`,
-   and `.insert(table).values(obj).returning()`. The `returning()` shape
-   is what gives us the inserted row back.
-2. **Drizzle — Insert / Delete** — https://orm.drizzle.team/docs/insert
-   and https://orm.drizzle.team/docs/delete
-   Just to confirm the `.values({...})` and `.where(eq(...))` shapes.
-   If you used Prisma before, Drizzle's insert is less ceremonious and
-   doesn't auto-generate types the same way.
-3. **Node `crypto.randomBytes` and `createHash`** — https://nodejs.org/api/crypto.html
-   For the enrollment token (random 32 bytes → 64 hex chars) and the
-   `apiTokenHash` (sha256 of the same). The dynamic `await import('crypto')`
-   is just a stylistic choice — `import { randomBytes, createHash } from 'crypto'`
-   at the top of the file works too, pick whichever you prefer.
+- §5's Produces: the middlewares compile.
+- **The ADR-0005 schema migration has been applied.** The `devices` table as
+  built in 02 still has `api_token_hash text NOT NULL` and no `status` column.
+  The routes below can't work until it changes (an insert that supplies no
+  `api_token_hash` violates `NOT NULL`). Check:
 
-### 6.2 The enrollment flow — read this before writing
+  ```sh
+  rg -n "apiTokenHash|status" apps/api/src/schema/devices.ts
+  ```
 
-There are three routes in this file and they exist in this order for a
-specific reason. Read the flow end-to-end, then write the handlers.
+  Expected: `apiTokenHash` absent, `status` present. If not, apply the ADR-0005
+  migration first (drop `api_token_hash`, add `devices.status`, and create the
+  `enrollment_tokens` table — see §6.2) — flagged in the adjudication list.
 
-1. **`POST /devices`** (auth: user session) — user creates an enrollment
-   token. We do **not** create a `devices` row yet — only a row in
-   `verifications` with `type='device_enroll'`. This avoids orphan device
-   rows when the user generates a token and never uses it. The token
-   expires in 30 minutes.
+### Read first
 
+1. **Drizzle — select** — https://orm.drizzle.team/docs/select
+   `db.select({...projection}).from(table).where(predicate)`.
+2. **Drizzle — insert / delete** — https://orm.drizzle.team/docs/insert and
+   https://orm.drizzle.team/docs/delete
+   `.values({...})` and `.where(eq(...))` shapes, and `.returning()`.
+3. **Node crypto** — https://nodejs.org/api/crypto.html
+   `randomBytes` for the Enrollment Token (32 bytes → 64 hex chars).
+
+### 6.1 The enrollment flow — read this before writing
+
+Three routes, in this order, for a reason:
+
+1. **`POST /devices`** (auth: user session) — user creates an Enrollment Token.
+   We do **not** create a `devices` row yet. We write a row to an
+   `enrollment_tokens` table with the requested `name`/`os` and a 30-minute
+   expiry. No orphan device rows when a token goes unused.
 2. **User copies the token to the daemon machine** and runs
-   `./ctrluhr enroll <token> <name> <os>` (that's `05-daemon-setup.md`).
+   `ctrluhr auth enroll <token>` (that's `05-daemon-setup.md`).
+3. **`POST /devices/enroll`** (auth: none — the token IS the auth) — the daemon
+   exchanges the token. We look up the row, check it's unexpired, **now** create
+   the `devices` row (status `active`) from the token row's name/os, delete the
+   token row (one-time use), and return a long-lived Device Key (`signDeviceJwt`).
 
-3. **`POST /devices/enroll`** (auth: none — the token IS the auth) —
-   daemon exchanges the token. We look up the enrollment-token row,
-   validate it's unexpired and of type `device_enroll`, then *now* create
-   the `devices` row. The token row is deleted (one-time use). The daemon
-   receives a long-lived device JWT, which it stores in
-   `~/.config/ctrluhr/config.toml`.
+The asymmetry is intentional: `/devices` needs a session, `/devices/enroll`
+needs only the pre-shared token — the single place in the system where identity
+is proven with a token instead of a session or JWT.
 
-The asymmetry — token-only auth on `/enroll` but user-session auth on
-`/devices` — is intentional. The enrollment endpoint is the *only* place
-in the system where something proves its identity with a pre-shared
-token instead of a session or JWT. Everywhere else, the caller is
-already identified.
+**Design decision to confirm (flagged in the adjudication list):** the old draft
+stored enrollment tokens in the `verifications` table with `type='device_enroll'`
+and a `token` column. The ADR-0006 migration **dropped those columns** —
+`verifications` is now `id, identifier, value, user_id, expires_at, created_at,
+updated_at` and is better-auth-owned. Storing enrollment rows there is no longer
+possible without colliding with better-auth's magic-link rows. The recommended
+replacement is a small dedicated table:
 
-### 6.3 `api_token_hash` — dropped (ADR-0005)
+```sql
+-- migration target (REFERENCE ONLY — a decision point, see adjudication list)
+CREATE TABLE enrollment_tokens (
+  id          text PRIMARY KEY,          -- caller-generated text id (ADR-0006)
+  user_id     text NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  name        text NOT NULL,
+  os          text NOT NULL,
+  token       text NOT NULL,             -- 64 hex chars, randomBytes(32)
+  expires_at  timestamptz NOT NULL,
+  created_at  timestamptz NOT NULL DEFAULT now()
+);
+```
 
-The original draft stored a SHA-256 hash of a separate random string to
-support "future rotation". With revocation handled by the per-batch
-device-status check (§5.5), rotation is simply: revoke the device and
-re-enroll. The column and the random/hash dance are gone —
-`POST /devices/enroll` returns only the device JWT.
+And per ADR-0005, `devices` gains `status text NOT NULL DEFAULT 'active'`
+(`'active' | 'revoked'`) and drops `api_token_hash`.
 
-### 6.4 Write `apps/api/src/routes/devices.ts`
+### 6.2 Write `apps/api/src/routes/devices.ts`
 
-By now the structure should be obvious. The file has three handlers:
-`GET /` (list), `POST /` (create enrollment token), `POST /enroll`
-(exchange token for JWT).
+For each handler: `c.get('userId')` is already typed; `c.req.json()` parses the
+body (two fields — skip Zod); Drizzle is the main call; `signDeviceJwt` issues
+the key. The response field for the key is `device_key` — the glossary's term
+(`api_token` is an avoided alias, see `CONTEXT.md`).
 
-For each handler, the steps are:
-- `c.get('userId')` is already typed (from §5.2's `Variables`).
-- `c.req.json()` parses the body; you can pass a generic to type the
-  shape, or use Zod (overkill for two fields).
-- Drizzle's query builder is the main library call — keep the docs
-  page open while you write.
-- Use `randomBytes` for the token, `createHash` for the hash.
-- `signDeviceJwt` from §5.4 produces the JWT.
-- Return JSON with `c.json({...})`.
-
-#### Reference — what the end file should look like
+#### Reference — target shape
 
 ```ts
 // apps/api/src/routes/devices.ts — REFERENCE ONLY
-
+import { randomBytes } from 'crypto';
+import { eq } from 'drizzle-orm';
 import { createHono } from '../lib/hono-factory';
 import { requireUser } from '../lib/session';
+import { requireDevice } from '../lib/device-auth';
+import { signDeviceJwt } from '../lib/device-jwt';
 import { db } from '../lib/db';
 import { devices } from '../schema/devices';
-import { verifications } from '../schema/verifications';
-import { eq } from 'drizzle-orm';
-import { signDeviceJwt } from '../lib/device-jwt';
-import { randomBytes } from 'crypto';
+import { enrollmentTokens } from '../schema/enrollment-tokens';
 
 const app = createHono();
 
@@ -714,6 +884,7 @@ app.get('/', requireUser, async (c) => {
       id: devices.id,
       name: devices.name,
       os: devices.os,
+      status: devices.status,
       lastSeenAt: devices.lastSeenAt,
       createdAt: devices.createdAt,
     })
@@ -722,7 +893,7 @@ app.get('/', requireUser, async (c) => {
   return c.json({ devices: rows });
 });
 
-/** Create a device and get a one-time enrollment token. */
+/** Create an Enrollment Token (no devices row yet). */
 app.post('/', requireUser, async (c) => {
   const userId = c.get('userId');
   const body = await c.req.json<{ name?: string; os?: string }>();
@@ -731,243 +902,156 @@ app.post('/', requireUser, async (c) => {
   }
 
   const token = randomBytes(32).toString('hex');
-  const expires = new Date(Date.now() + 30 * 60 * 1000); // 30-min window
+  const expires = new Date(Date.now() + 30 * 60 * 1000);
 
-  await db.insert(verifications).values({
+  await db.insert(enrollmentTokens).values({
     userId,
+    name: body.name,
+    os: body.os,
     token,
-    type: 'device_enroll',
     expiresAt: expires,
   });
 
   return c.json({ enrollment_token: token, expires_at: expires.toISOString() });
 });
 
-/** Exchange an enrollment token for a long-lived device JWT. */
+/** Exchange an Enrollment Token for a long-lived Device Key. */
 app.post('/enroll', async (c) => {
-  const body = await c.req.json<{
-    enrollment_token?: string;
-    name?: string;
-    os?: string;
-  }>();
-  if (!body?.enrollment_token || !body?.name || !body?.os) {
-    return c.json({ error: 'enrollment_token, name, os required' }, 400);
+  const body = await c.req.json<{ enrollment_token?: string }>();
+  if (!body?.enrollment_token) {
+    return c.json({ error: 'enrollment_token required' }, 400);
   }
 
-  // Look up the unused, unexpired enrollment token.
   const rows = await db
     .select()
-    .from(verifications)
-    .where(eq(verifications.token, body.enrollment_token))
+    .from(enrollmentTokens)
+    .where(eq(enrollmentTokens.token, body.enrollment_token))
     .limit(1);
   const row = rows[0];
-  if (!row || row.type !== 'device_enroll' || row.expiresAt < new Date()) {
+  if (!row || row.expiresAt < new Date()) {
     return c.json({ error: 'invalid or expired token' }, 401);
   }
 
-  // Create the device. (No api_token_hash — see §6.3 / ADR-0005.)
   const [device] = await db
     .insert(devices)
     .values({
       userId: row.userId,
-      name: body.name,
-      os: body.os,
+      name: row.name,
+      os: row.os,
+      status: 'active',
     })
     .returning();
 
-  // Enrollment token is one-time-use; delete it.
-  await db.delete(verifications).where(eq(verifications.id, row.id));
+  // One-time use.
+  await db.delete(enrollmentTokens).where(eq(enrollmentTokens.id, row.id));
 
-  // Issue the long-lived JWT the daemon will actually use.
-  const jwt = await signDeviceJwt({ deviceId: device.id, userId: row.userId });
+  const deviceKey = await signDeviceJwt({ deviceId: device.id, userId: row.userId });
 
-  return c.json({ device_id: device.id, api_token: jwt });
+  return c.json({
+    device_id: device.id,
+    device_key: deviceKey,
+    name: row.name,
+    os: row.os,
+  });
 });
 
 export { app as devicesRoute };
 ```
 
-### 6.5 Sanity check
+### Verify
 
-Before moving to §7, confirm the flow end-to-end via curl:
+Sign in via the web app (04) or the §3.5 magic link, export the session cookie
+to `cookies.txt` (browser devtools), then:
 
 ```sh
-# After logging in via the web UI (or directly with better-auth's
-# session cookie), then:
-curl -X POST http://localhost:3000/devices \
-  -H 'Content-Type: application/json' \
-  -b cookies.txt \
-  -d '{"name":"my-laptop","os":"linux"}'
-# → { "enrollment_token": "<64 hex chars>", "expires_at": "..." }
+# no session → 401
+curl -s -i -X POST http://localhost:3000/devices
+# → HTTP/1.1 401 Unauthorized
 
-# Then, with the token:
-curl -X POST http://localhost:3000/devices/enroll \
-  -H 'Content-Type: application/json' \
-  -d '{"enrollment_token":"<token>","name":"my-laptop","os":"linux"}'
-# → { "device_id": "<uuid>", "api_token": "ey..." }
+# with session → Enrollment Token
+curl -s -X POST http://localhost:3000/devices -b cookies.txt \
+  -H 'Content-Type: application/json' -d '{"name":"my-laptop","os":"linux"}'
+# → {"enrollment_token":"<64 hex chars>","expires_at":"..."}
+
+# exchange the token → Device Key
+curl -s -X POST http://localhost:3000/devices/enroll \
+  -H 'Content-Type: application/json' -d '{"enrollment_token":"<token>"}'
+# → {"device_id":"<id>","device_key":"eyJ...","name":"my-laptop","os":"linux"}
+
+# the token is one-time use — replay fails
+curl -s -X POST http://localhost:3000/devices/enroll \
+  -H 'Content-Type: application/json' -d '{"enrollment_token":"<same token>"}'
+# → 401 {"error":"invalid or expired token"}
 ```
 
-If `POST /devices` returns 401, your session cookie isn't reaching the
-API. If `POST /devices/enroll` returns "invalid or expired token" on a
-fresh token, the `verifications.type` check is failing — re-check the
-insert in `POST /devices` and the type string in the `where` clause match.
+### Produces
 
-## 7. Events route + categorizer + embeddings
+`apps/api/src/routes/devices.ts` — the enrollment flow end-to-end.
 
-Three files work together: `embeddings.ts` is the OpenAI wrapper,
-`categorizer.ts` is the business logic that decides which category an
-event belongs to, and `routes/events.ts` is the HTTP handler that
-ingests batches from the daemon. The first two are short; the handler
-is where most of the design lives.
+---
 
-### 7.1 Read these in order
+## 7. Events route — ingest only
 
-1. **OpenAI Node SDK — embeddings** — https://github.com/openai/openai-node#embeddings
-   The `openai.embeddings.create({ model, input })` shape. We use
-   `text-embedding-3-small` (1536 dimensions, matches the `vector(1536)`
-   column in our schema). Read the "Embeddings" section — that's all we
-   need; the rest of the SDK isn't used in phase 0.
-2. **Drizzle — `onConflictDoNothing`** — https://orm.drizzle.team/docs/insert#on-conflict-do-nothing
-   This compiles to `INSERT ... ON CONFLICT (id) DO NOTHING`, which is
-   what makes event ingestion idempotent. The daemon generates UUIDs
-   client-side; if a batch is retried, the same UUIDs hit the same rows
-   and nothing duplicates. Read this doc — it's short and explains the
-   target column behavior.
-3. **Drizzle — `update` with `.set()` and `.where()`** — https://orm.drizzle.team/docs/update
-   Just to confirm the shape. We use this once, for the `last_seen_at`
-   touch on the device row.
-4. **Zod — `safeParse` and `flatten`** — https://zod.dev/?id=safeparse
-   We use `safeParse` (returns `{ success, data, error }` rather than
-   throwing) and `error.flatten()` to produce a structured 400 response.
-   The `02-database-setup.md` schema package already exports
-   `EventBatchSchema`; we just consume it.
+The hot path, and deliberately the smallest design in this doc. ADR-0002 removed
+everything that used to live here: no server-side embeddings, no categorizer
+(none of `embeddings.ts` / `categorizer.ts` exist or will exist in phase 0).
+Rules run in the daemon and embedding matching is browser-mediated in phase 2 —
+the API's only job is to *accept and persist* events safely.
 
-### 7.2 `lib/embeddings.ts` — define the function, don't call it (yet)
+### Assumes
 
-We write the `embed()` function now but **don't call it in phase 0**.
-The categorizer (§7.3) is rules-only, so no embeddings happen on
-ingest. Why define the function then?
+§5's Produces (`requireDevice`). §2's Produces (`EventBatchSchema`). A Device
+Key from §6 to call it with.
 
-- Phase 2 is a one-liner swap inside the categorizer — `import { embed } from './embeddings'` and you're done.
-- It surfaces the OpenAI dep early so the env var check at import time
-  fires immediately if `OPENAI_API_KEY` is missing.
-- It establishes the function signature (`(text: string) => Promise<number[]>`)
-  that the phase 2 categorizer will call.
+### Read first
 
-Read the OpenAI SDK doc, write the function, move on. The body is five
-lines.
+1. **Drizzle — insert with `onConflictDoNothing`** — https://orm.drizzle.team/docs/insert
+   The "on conflict do nothing" section. This compiles to
+   `INSERT ... ON CONFLICT (id) DO NOTHING` and is what makes ingestion
+   idempotent: the daemon generates ids client-side, so a replayed batch hits
+   the same rows and inserts nothing.
+2. **Zod — `safeParse` and `flatten`** — https://zod.dev
+   `safeParse` returns `{ success, data, error }` instead of throwing;
+   `error.flatten()` produces a structured 400 body the daemon can read.
 
-#### Reference — what the end file should look like
-
-```ts
-// apps/api/src/lib/embeddings.ts — REFERENCE ONLY
-
-import OpenAI from 'openai';
-
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY! });
-
-export async function embed(text: string): Promise<number[]> {
-  const res = await openai.embeddings.create({
-    model: 'text-embedding-3-small',
-    input: text,
-  });
-  return res.data[0].embedding;
-}
-```
-
-### 7.3 `lib/categorizer.ts` — rules-only for phase 0
-
-The categorizer is what turns `(appName, windowTitle)` into a
-`categoryId`. Phase 0 implements one rule type: exact match of `appName`
-against `category_rules.pattern` (case-insensitive). Phase 2 adds
-`title_regex` rules and an embedding-fallback when no rule matches —
-redesigned client-side by ADR-0002. Productivity is **not** resolved
-here: it is always joined live from the category at query time
-(ADR-0004).
-
-Read the Drizzle query builder doc to confirm the `select` + `innerJoin`
-+ `where(and(...))` shape. The function is small; the only design
-question is whether to do the rule match in SQL or in app code after
-loading. We load + match in app code because:
-
-- The rule set is tiny (a few dozen rows per user). Loading them is
-  cheap.
-- Title-regex matching in phase 2 is awkward in SQL (`~*` works but
-  debugging is harder in app code).
-- Phase 2's "embed + nearest neighbor" step isn't a SQL-side match
-  anyway, so the categorizer is going to grow logic; might as well
-  centralize it.
-
-#### Reference — what the end file should look like
-
-```ts
-// apps/api/src/lib/categorizer.ts — REFERENCE ONLY
-
-import { db } from './db';
-import { categories, categoryRules } from '../schema';
-import { eq, and } from 'drizzle-orm';
-
-export async function categorizeEvent(
-  userId: string,
-  appName: string,
-  windowTitle: string,
-): Promise<string | null> {
-  const rules = await db
-    .select({
-      categoryId: categoryRules.categoryId,
-      pattern: categoryRules.pattern,
-    })
-    .from(categoryRules)
-    .innerJoin(categories, eq(categories.id, categoryRules.categoryId))
-    .where(and(eq(categories.userId, userId), eq(categoryRules.patternType, 'app_name')));
-
-  const hit = rules.find((r) => r.pattern.toLowerCase() === appName.toLowerCase());
-
-  return hit?.categoryId ?? null;
-}
-```
-
-### 7.4 `routes/events.ts` — the ingest handler
-
-This is the hot path. Read the Drizzle `onConflictDoNothing` doc carefully
-— that one operator is what makes the whole ingestion safe to retry, and
-it's worth understanding why before you paste the code.
+### Do
 
 Per-event flow:
-1. `c.get('userId')` and `c.get('deviceId')` — typed from the
-   `requireDevice` middleware in §5.5.
-2. Parse the body with `EventBatchSchema.safeParse(...)` from the
-   `packages/schema` package. On failure return 400 with
-   `parsed.error.flatten()` so the daemon can see which fields were wrong.
-3. For each event, call `categorizeEvent()` to get a category.
-4. Insert with `.onConflictDoNothing({ target: activityEvents.id })`.
-   The daemon-generated UUID is the conflict target, so a replay is a
-   no-op rather than a duplicate.
-5. After the loop, touch `devices.lastSeenAt = new Date()`. Single
-   `update` per batch, not per event.
-6. Return `{ receipts: [{ id, category_id }, ...] }` so the daemon can
-   track which events the server actually inserted (the `if (row)` guard
-   skips events that hit the conflict).
 
-Performance note: we loop and insert one event at a time. Phase 0
-throughput doesn't need batching (you'll see single-digit events per
-minute from the stub tracker). Phase 1+ can swap to a single multi-row
-insert with `db.insert(table).values([...])` — the API surface doesn't
-change.
+1. `c.get('userId')` and `c.get('deviceId')` — typed from `requireDevice`.
+2. Parse the body with `EventBatchSchema.safeParse(...)`. On failure return 400
+   with `parsed.error.flatten()` so the daemon can see which fields were wrong.
+3. Insert each event with `.onConflictDoNothing({ target: activityEvents.id })`
+   and `.returning()`. A replay is a no-op rather than a duplicate.
+4. After the loop, touch `devices.lastSeenAt` — one update per batch, not per event.
+5. Return `{ receipts: [...] }` — one receipt per *inserted* event (the
+   conflict rows return nothing), shaped by `EventReceiptSchema`.
 
-#### Reference — what the end file should look like
+Three things this route must **not** do, all ADR-driven:
+
+- **No `productive` insert** (ADR-0004). The `activity_events.productive` column
+  still physically exists (its drop is scheduled before phase 1) but nothing
+  writes or reads it — productivity is always joined live from the Category.
+- **No `raw_embedding`** (ADR-0002). Same column story; server-side role suspended.
+- **No `category_id` assignment** — every insert carries `categoryId: null`
+  until phase 2. Receipts report `category_id: null`; the daemon's bookkeeping
+  is built for the field, not the value.
+
+Perf note: one insert per event is fine — phase 0 sees single-digit events per
+minute from the stub tracker. Phase 1+ can swap to a single multi-row
+`db.insert(table).values([...])`; the wire doesn't change.
+
+#### Reference — target shape
 
 ```ts
 // apps/api/src/routes/events.ts — REFERENCE ONLY
-
+import { eq } from 'drizzle-orm';
 import { createHono } from '../lib/hono-factory';
 import { requireDevice } from '../lib/device-auth';
 import { db } from '../lib/db';
 import { activityEvents } from '../schema/activity-events';
 import { devices } from '../schema/devices';
 import { EventBatchSchema } from '@ctrluhr/schema';
-import { categorizeEvent } from '../lib/categorizer';
-import { eq } from 'drizzle-orm';
 
 const app = createHono();
 
@@ -977,21 +1061,14 @@ app.post('/', async (c) => {
   const userId = c.get('userId');
   const deviceId = c.get('deviceId')!;
 
-  const body = await c.req.json();
-  const parsed = EventBatchSchema.safeParse(body);
+  const parsed = EventBatchSchema.safeParse(await c.req.json());
   if (!parsed.success) {
     return c.json({ error: 'invalid batch', details: parsed.error.flatten() }, 400);
   }
 
-  const events = parsed.data.events;
   const receipts = [];
-  for (const ev of events) {
-    const categoryId = await categorizeEvent(
-      userId,
-      ev.app_name,
-      ev.window_title,
-    );
-
+  for (const ev of parsed.data.events) {
+    // Ingest only: no categorizer, no embed, no productive (ADR-0002, ADR-0004).
     const [row] = await db
       .insert(activityEvents)
       .values({
@@ -1000,17 +1077,17 @@ app.post('/', async (c) => {
         deviceId,
         appName: ev.app_name,
         windowTitle: ev.window_title,
-        categoryId,
+        categoryId: null,
         startedAt: new Date(ev.started_at),
         endedAt: new Date(ev.ended_at),
       })
       .onConflictDoNothing({ target: activityEvents.id })
-      .returning({ id: activityEvents.id, categoryId: activityEvents.categoryId });
+      .returning({ id: activityEvents.id });
 
-    if (row) receipts.push({ id: row.id, category_id: row.categoryId });
+    if (row) receipts.push({ id: row.id, category_id: null });
   }
 
-  // Update last_seen_at on the device. One update per batch, not per event.
+  // One last_seen_at touch per batch, not per event.
   await db.update(devices).set({ lastSeenAt: new Date() }).where(eq(devices.id, deviceId));
 
   return c.json({ receipts });
@@ -1019,32 +1096,78 @@ app.post('/', async (c) => {
 export { app as eventsRoute };
 ```
 
+### Verify
+
+With `JWT` set to the `device_key` from §6:
+
+```sh
+export JWT="<device_key from §6>"
+curl -s -X POST http://localhost:3000/events \
+  -H "Authorization: Bearer $JWT" -H 'Content-Type: application/json' \
+  -d '{"events":[{"id":"11111111-1111-4111-8111-111111111111","app_name":"Code","window_title":"writing docs","started_at":"2026-08-05T09:00:00Z","ended_at":"2026-08-05T09:10:00Z"}]}'
+# → {"receipts":[{"id":"11111111-1111-4111-8111-111111111111","category_id":null}]}
+
+# replay the identical batch — idempotent, nothing new
+curl -s -X POST http://localhost:3000/events \
+  -H "Authorization: Bearer $JWT" -H 'Content-Type: application/json' \
+  -d '{"events":[{"id":"11111111-1111-4111-8111-111111111111","app_name":"Code","window_title":"writing docs","started_at":"2026-08-05T09:00:00Z","ended_at":"2026-08-05T09:10:00Z"}]}'
+# → {"receipts":[]}
+
+# no Device Key → 401
+curl -s -i -X POST http://localhost:3000/events -H 'Content-Type: application/json' -d '{"events":[]}'
+# → HTTP/1.1 401 Unauthorized
+
+# invalid body → 400 with flatten() details
+curl -s -X POST http://localhost:3000/events \
+  -H "Authorization: Bearer $JWT" -H 'Content-Type: application/json' \
+  -d '{"events":[{"id":"not-a-uuid"}]}'
+# → 400 {"error":"invalid batch","details":{...}}
+```
+
+The empty-`receipts` replay is the check that idempotency actually works; a
+non-idempotent insert would return two receipts and a doubled row.
+
+### Produces
+
+`apps/api/src/routes/events.ts` — the ingest-only endpoint.
+
+---
+
 ## 8. Analytics route
 
-One endpoint, the day's breakdown. The dashboard calls it on a 15-second
-interval, so this is a hot read path. Most of the file is one Drizzle
-query with a SQL `extract(epoch from ...)` expression; the only library
-surface is Drizzle's `sql` template tag.
+One endpoint, the day's breakdown. The dashboard polls it on a 15-second
+interval, so it's a hot read path. Most of the file is one Drizzle query with a
+`sql` template.
 
-### 8.1 Read these in order
+### Assumes
+
+§5's Produces (`requireUser`). §7's Produces (there are events to aggregate).
+**The `users.timezone` column exists** — it doesn't yet (ADR-0003 scheduled it;
+see the adjudication list). Check:
+
+```sh
+rg -n "timezone" apps/api/src/schema/users.ts
+```
+
+Expected: a `timezone` column. If absent, add it (default `'UTC'`, IANA string,
+set from the browser at first login in 04) before this step — user-local day
+boundaries are non-negotiable (ADR-0003).
+
+### Read first
 
 1. **Drizzle — `sql` template tag** — https://orm.drizzle.team/docs/sql
-   The `sql<number>\`sum(extract(epoch from ${col1} - ${col2}))::int\``
-   pattern is how you drop down to raw SQL inside a Drizzle query. The
-   `sql<T>` generic tells TypeScript the result type. Read the whole
-   page — it's short and there's nothing else in the file that needs
-   Drizzle docs.
-2. **Drizzle — `groupBy`** — https://orm.drizzle.team/docs/select#group-by
-   The grouping keys (category_id, category_name, productive) are
-   chosen so uncategorized events (all NULLs) collapse into a single
-   row. This is the only design subtlety in the file.
+   The `sql<number>\`...\`` pattern for dropping down to raw SQL inside a query;
+   the generic tells TypeScript the result type.
+2. **Drizzle — select with groupBy** — https://orm.drizzle.team/docs/select
+   Grouping keys are chosen so uncategorized events (all NULLs) collapse into a
+   single row.
 
-### 8.2 The query — read this before writing
+### Do
 
-For the day, we want: for each category the user has events in, the
-total seconds spent in that category. One row per (category, productive)
-combination, with uncategorized events collapsing to a single row with
-all NULLs.
+For the requested day, per category the User has events in: total seconds.
+One row per category, with uncategorized events collapsing to one all-NULL row.
+
+The query:
 
 ```sql
 SELECT
@@ -1061,41 +1184,23 @@ WHERE activity_events.user_id = $1
 GROUP BY activity_events.category_id, categories.name, categories.is_productive
 ```
 
-Productivity comes live from the category (ADR-0004); the date range is a
-half-open interval over the User-local day (ADR-0003).
+Two ADR requirements land here:
 
-The Drizzle version of this query is mechanical: project the columns,
-`.leftJoin(categories, ...)`, `.where(and(eq(userId), sql\`started_at >= ${start}\`, ...))`,
-`.groupBy(...)`. The only Drizzle-specific thing is the `sql<number>`
-template inside the `select` projection — read the doc for that.
+- **Productivity is live** (ADR-0004): the `LEFT JOIN` pulls `categories.is_productive`
+  at query time. Never read `activity_events.productive`.
+- **Day boundaries are user-local** (ADR-0003): `$2`/`$3` are the User-local
+  midnights converted to UTC instants, a half-open interval `[day, day+1)` —
+  no `23:59:59.999` hack. Event storage stays UTC.
 
-### 8.3 Date handling
+`date` comes in as `YYYY-MM-DD` (default: today in the User's timezone). The
+`/^\d{4}-\d{2}-\d{2}$/` regex is a quick sanity check; it accepts
+`2026-02-30`, which Postgres handles gracefully (zero rows). If you want a real
+calendar check, add one.
 
-`date` comes in as a `YYYY-MM-DD` query param (default: today **in the
-User's timezone**). Day boundaries are user-local (ADR-0003): the User's
-IANA timezone lives on `users.timezone` (default `'UTC'`, set from the
-browser at first login), and we ask Postgres to convert local-midnight
-boundaries into UTC instants for the `started_at` filter:
-
-```sql
-('2026-07-14'::date)::timestamp AT TIME ZONE 'America/New_York'  -- → timestamptz of local midnight
-```
-
-The filter is a half-open range `>= local midnight` and `< next local
-midnight`, which also avoids the `23:59:59.999` end-of-day hack.
-
-The `/^\d{4}-\d{2}-\d{2}$/` regex is a quick sanity check. It accepts
-"2026-02-30" which isn't a real day, but Postgres returns zero rows for
-non-existent dates — graceful. If you want a real date check, use Zod
-or a `Date.parse(...)` check.
-
-### 8.4 Write `apps/api/src/routes/analytics.ts`
-
-#### Reference — what the end file should look like
+#### Reference — target shape
 
 ```ts
 // apps/api/src/routes/analytics.ts — REFERENCE ONLY
-
 import { createHono } from '../lib/hono-factory';
 import { requireUser } from '../lib/session';
 import { db } from '../lib/db';
@@ -1155,114 +1260,174 @@ app.get('/day', async (c) => {
 export { app as analyticsRoute };
 ```
 
-### 8.5 Sanity check
+### Verify
+
+With `cookies.txt` from §6 and an ingested event from §7 (adjust the date to
+your ingest):
 
 ```sh
-# After ingesting some events via §7, with the session cookie:
-curl 'http://localhost:3000/analytics/day?date=2026-07-14' \
-  -b cookies.txt
+curl -s 'http://localhost:3000/analytics/day?date=2026-08-05' -b cookies.txt
+# → {"date":"2026-08-05","buckets":[{"category_id":null,"category_name":"Uncategorized","productive":null,"total_seconds":600}]}
+
+# no session → 401
+curl -s -i 'http://localhost:3000/analytics/day?date=2026-08-05'
+# → HTTP/1.1 401 Unauthorized
+
+# malformed date → 400
+curl -s -i 'http://localhost:3000/analytics/day?date=2026-13-99' -b cookies.txt
+# → HTTP/1.1 400 Bad Request  {"error":"date must be YYYY-MM-DD"}
 ```
 
-Expected: `{ "date": "2026-07-14", "buckets": [...] }` with at least
-one bucket if you have any ingested events for that day. If the buckets
-array is empty, check the date range — UTC vs your local timezone can
-shift events into the previous/next day.
+If buckets come back empty, check the date range — UTC vs your local timezone
+shifts events across the boundary by design.
 
-## 9. Run + verify
+### Produces
 
-From `apps/api/`:
+`apps/api/src/routes/analytics.ts` — the daily breakdown endpoint.
+
+---
+
+## 9. Run + verify — the smoke flow
+
+The built regression plus the plan-first curl flow, in order:
 
 ```sh
-bun run src/index.ts
+# built: auth ↔ schema sync regression (ADR-0006)
+cd apps/api && bun test-resend.ts
+
+# plan-first, once §4–8 land:
+cd apps/api && bun run dev
 ```
 
-In another terminal:
+Then, in another terminal:
 
 ```sh
-curl http://localhost:3000/healthz
-# {"ok":true}
+curl -s http://localhost:3000/healthz                      # {"ok":true}
+curl -s http://localhost:3000/auth/get-session             # {"data":null,"error":null}
+# §6: POST /devices (with cookie) → enrollment token; POST /devices/enroll → device_key
+# §7: POST /events with the device_key → receipts; replay → empty receipts
+# §8: GET /analytics/day → buckets
 ```
 
-If that works, the server boots. Next, check the auth flow:
-
-### Manual magic-link smoke
-
-Per the magic link plugin docs (https://www.better-auth.com/docs/plugins/magic-link#sign-in-with-magic-link),
-the server endpoint is `POST /auth/sign-in/magic-link` (with the handler
-mounted at `/auth/*` as in §4):
-
-```sh
-curl -X POST http://localhost:3000/auth/sign-in/magic-link \
-  -H 'Content-Type: application/json' \
-  -d '{"email":"you@youremail.dev"}'
-```
-
-Then check the Resend dashboard → "Logs" — your email should appear. Click
-the link in your inbox → you'll land at the `callbackURL` (we default to
-`/` on the web app, which 404s until `04-web-setup.md` — that's fine; the
-*email mechanism* working is the goal here).
-
-If you're sending from `onboarding@resend.dev` (the Resend sandbox sender),
-it ONLY delivers to the email tied to your Resend account. Use that email
-as the recipient for phase 0.
+A fuller end-to-end gate (sign in → enroll → ingest → dashboard) is
+`06-phase0-smoke-test.md`; the goal to hold in your head from the README: *you
+log in via magic link, create a Device, enroll a daemon with that Device's key,
+and watch synthetic events appear on the dashboard — all wired by you.*
 
 ## 10. Commit `[commit]`
 
+The built API surface (§0–§3) is already committed. Make **two** commits on the
+plan-first work so rollback stays cheap:
+
 ```sh
-git add -A
-git commit -m "feat(api): hono server, better-auth magic link, /events + /devices + /analytics"
+git add apps/api/src/index.ts apps/api/src/lib apps/api/src/routes
+git commit -m "feat(api): hono bootstrap, auth middlewares, /devices + /events + /analytics"
 ```
+
+```sh
+# after any schema migration (enrollment_tokens, devices.status, users.timezone)
+git add apps/api/src/schema apps/api/migrations
+git commit -m "feat(db): enrollment tokens, device status, user timezone"
+```
+
+Small commits make rollbacks painless.
 
 ## Common pitfalls
 
-### better-auth `drizzleAdapter` rejects our `verifications` table name
-The `verification: schema.verifications` mapping works because
-better-auth's adapter accepts any Drizzle table whose shape matches. If
-the column set differs, re-run the `auth generate` CLI (per the Drizzle
-adapter docs' "Schema generation & migration" section) for the shape it
-expects and add the missing columns. Note: the CLI package is now the
-unscoped `auth` (`pnpm exec auth@latest generate ...`), not the older
-`@better-auth/cli`.
+### `22P02 invalid input syntax for type uuid: <32-char hex>`
+The ADR-0006 failure: a `uuid` column is receiving a `text` id. Auth-managed
+columns and everything that references them are `text` — check §3.5 re-ran clean.
 
-### `import { magicLink } from 'better-auth/plugins'` fails
-The path may differ in your installed version. Check
-`node_modules/better-auth/dist/plugins/` for the actual filename, and
-verify against the Magic Link plugin docs (the docs always show the
-correct import for the current version).
-
-### `getSession` returns null even after click
-Cookie domain mismatch. `BETTER_AUTH_URL` must match the URL your browser
-sees for the API. If you're testing in a browser at `http://localhost:5173`
-calling `http://localhost:3000`, the fetch calls to the API need
-`credentials: 'include'` AND `cors({ credentials: true })` on Hono (we
-set both in §4). The better-auth docs have a CORS / cookies section
-under Integrations — read that if you hit issues, don't guess.
+### `pnpm exec auth@latest generate` can't find the CLI
+`exec` resolves local packages; the auth CLI is downloaded on demand. Use
+`pnpm dlx auth@latest generate` (or `npx …`). Note this is the opposite of
+`drizzle-kit`, which IS local — that one uses `pnpm exec`.
 
 ### `drizzle-orm/neon-serverless` not found
-Use `drizzle-orm/neon-http` instead — the package name changed. Or bump
-`drizzle-orm` to >= 0.33.0. Both work; check `node_modules/drizzle-orm/` for
-which subpath exists.
+Use `drizzle-orm/neon-http` — the subpath changed, and this repo pins
+`drizzle-orm@1.0.0-rc.4`. Check `node_modules/drizzle-orm/` for which subpath
+your version exports. Also: don't try `drizzle(sql, { schema })` — 1.0 dropped
+schema binding; the schema map goes to `drizzleAdapter` in `auth.ts`.
+
+### `DATABASE_URL` undefined when drizzle-kit or the DB client runs
+The env var is `DB_URL` in this repo (`.env.example`, `lib/db.ts`,
+`drizzle.config.ts`). If a doc or snippet says `DATABASE_URL`, it's stale — see
+the adjudication list.
+
+### `getSession` returns null even after a successful login
+Cookie domain mismatch. `BETTER_AUTH_URL` must match the URL the browser sees,
+the web app's fetches need `credentials: 'include'`, and Hono's CORS needs
+`credentials: true` (§4). Re-read the better-auth Hono/CORS pages; don't guess.
+
+### `import { magicLink } from 'better-auth/plugins'` fails
+The path differs between versions — check `node_modules/better-auth/dist/plugins/`
+and the magic-link docs. The built `auth.ts` uses the `better-auth/plugins` path.
 
 ### `@ctrluhr/schema` cannot be resolved by Bun
-Bun resolves workspace packages through the root `pnpm-workspace.yaml` via
-symlinks in `node_modules`. Run `pnpm install` from the root. If Bun still
-fails, add the package to `imports` in `apps/api/package.json`:
-`"imports": { "@ctrluhr/schema": "../../packages/schema/src/index.ts" }`.
+Bun resolves workspace packages through root `pnpm-workspace.yaml` symlinks.
+Run `pnpm install` from the root. If it still fails, the package needs wiring in
+`apps/api/package.json` — that's a code-fix ticket.
 
-### `jose` not installed
-Run `pnpm add jose` in `apps/api`.
+### The §6 enroll insert violates `devices.api_token_hash NOT NULL`
+Expected until the ADR-0005 migration lands (drop the hash, add `status`) — see
+§6's Assumes and the adjudication list. Don't "fix" it by inventing a hash.
 
 ## Done criteria
 
-- [X] `bun run src/index.ts` boots Hono on `:3000`
-- [ ] `curl /healthz` returns `{ ok: true }`
-- [ ] `POST /auth/sign-in/magic-link` sends an email (visible in Resend logs)
-- [ ] Session cookie set with a real login (you can verify by hitting an
-  endpoint protected by `requireUser`)
-- [ ] `POST /devices` with the session returns an enrollment token
-- [ ] `POST /devices/enroll` with the token returns a JWT
-- [ ] `POST /events` with the JWT and a batch inserts events; `GET /analytics/day` returns them
-- [ ] One commit: "feat(api): hono server, better-auth magic link, /events + /devices + /analytics"
+Built parts (already true — the Verify for each is in its section):
 
-Next file: `04-web-setup.md` — TanStack Start app, auth gate, dashboard
-with ECharts, devices page.
+- [x] Deps installed, DB client, schema package, better-auth + magic link
+- [x] §3.5 schema-sync: `bun test-resend.ts` passes (auth ↔ schema in sync)
+
+Plan-first parts (each goes green only after its section is built):
+
+- [ ] `bun run dev` boots Hono on `:3000`; `/healthz` → `{ ok: true }`
+- [ ] `/auth/get-session` answers; magic link sends email (Resend logs)
+- [ ] Session cookie set; `requireUser`-guarded routes 401 without it
+- [ ] Device Key signed/verified; `requireDevice` 401s a Revoked Device's key
+- [ ] `POST /devices` + `/devices/enroll` yield a Device Key; token is one-time
+- [ ] `POST /events` inserts idempotently and returns receipts
+- [ ] `GET /analytics/day` returns user-local buckets; replay adds no duplicate
+
+Next file: `04-web-setup.md` — TanStack Start app, auth gate, dashboard with
+ECharts, devices page.
+
+## Adjudication list
+
+One line per doc↔code disagreement, with a recommendation. These are your calls:
+
+1. **README says "03 §0–5 committed" but §4–5 aren't built** — `index.ts` is bare
+   and `lib/` has only `db.ts`. Recommendation: fix README to "03 §0–3" (the
+   better-auth bootstrap), keep §4–8 as the next work.
+2. **Old doc used `DATABASE_URL`; repo uses `DB_URL`** (db.ts, .env.example,
+   drizzle.config.ts). Recommendation: fix doc (this file uses `DB_URL`);
+   separately flag 02-database-setup.md, which still shows `DATABASE_URL`.
+3. **Old doc §1: `neon-serverless` + `{ schema }` binding** — repo built
+   `neon-http` + `drizzle({ client })`. Recommendation: fix doc (done here);
+   note drizzle-orm is pinned at `1.0.0-rc.4`.
+4. **Old doc §6 stored enrollment tokens in `verifications`** — the ADR-0006
+   migration dropped `verifications.token`/`type`. Recommendation: fix doc —
+   dedicated `enrollment_tokens` table (design decision §6.1, confirm shape).
+5. **`devices.api_token_hash` still `NOT NULL`, no `status` column** — scheduled
+   for change by ADR-0005 but not applied. Recommendation: code-fix ticket to
+   apply the migration (drop hash, add `status`) before §6.
+6. **`users.timezone` missing** — scheduled by ADR-0003, needed by §8.
+   Recommendation: code-fix ticket to add the column (default `'UTC'`).
+7. **`activity_events.productive` + `raw_embedding` columns still exist** —
+   ADR-0004/0002 suspend them; drop scheduled before phase 1. Recommendation:
+   doc wording only (this file never reads/writes them); drops stay code-fix tickets.
+8. **`packages/schema` has no tsconfig.json** — its `typecheck`/`build` scripts
+   can't run. Recommendation: code-fix ticket to add one (extends
+   `tsconfig.base.json`).
+9. **`RESEND_FROM_EMAIL` required in built `auth.ts`** (non-null asserted), while
+   old doc said optional with a sandbox default. Recommendation: fix doc to match
+   (required; use `onboarding@resend.dev` in dev); if the hard requirement is
+   regretted, that's a code-fix ticket, not a doc edit.
+10. **Old doc §4 mounted auth with `app.route('/auth', auth.handler)`** — the
+    current better-auth Hono docs use `app.on([...], '/auth/*', c => auth.handler(c.req.raw))`.
+    Recommendation: fix doc (done here); verify against the official page when building.
+11. **Old doc migration commands targeted `@ctrluhr/db`** — no such package;
+    drizzle-kit lives in `@ctrluhr/api`. Recommendation: fix doc (done here).
+12. **Old doc §7 planned a server-side categorizer + embeddings** — superseded by
+    ADR-0002; `openai` is installed but inert in phase 0. Recommendation: fix doc
+    (done here — ingest-only); optionally a code-fix ticket to drop the unused dep.
