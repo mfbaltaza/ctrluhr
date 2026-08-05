@@ -1,182 +1,200 @@
-# 06 — Phase 0 Smoke Test
+# 06 — Phase 0 Smoke Test (executable exit gate)
 
-Run this once you've completed steps 01–05. It's the end-to-end checklist
-that proves the whole pipeline works together. If anything fails here,
-don't move to phase 1 — fix it first.
+Run this once you've completed `01`–`05`. It is the end-to-end gate that
+proves the whole pipeline works together. Every item is a runnable check
+with an expected output — nothing here is vibes. If anything fails, don't
+move to phase 1; fix it first.
 
-This file is a **manual test plan**, not a build doc. There are no new
-libraries to learn here. Where a checklist step touches a system component
-explained elsewhere, the step links to the relevant doc section so you
-can re-read the design if you need context.
+This file is a **manual test plan, not a build doc** — there are no new
+libraries to learn. Where a check touches a component explained elsewhere,
+it links to that doc so you can re-read the design if you need context.
 
-## Setup before the test
+## Pre-flight
 
-Run these in three terminals:
+### 0. Pre-requisite: the enrollment migration is applied
 
-**Terminal A — API** (`03-api-setup.md` §4 covers the Hono bootstrap):
+The plan-first parts of `03` §6 need a schema that phase 0's early build
+doesn't have yet: the `enrollment_tokens` table, `devices.status`, the drop
+of `devices.api_token_hash` and `activity_events.productive` (ADR-0005,
+ADR-0004). `03` §6's Assumes tell you how to generate + apply that
+migration. **Do not start this test without it** — the device-enroll checks
+below will fail against the old schema.
+
+### 1. Three terminals
+
+**Terminal A — API** (`03-api-setup.md` §4, the Hono bootstrap):
 ```sh
 cd apps/api
 bun run src/index.ts
 ```
-Waits on `:3000`. Confirms `Started Hono app on http://localhost:3000`
-(or whatever Bun prints).
+Expected: Hono listens on `:3000`; `/healthz` answers (check 1).
 
-**Terminal B — Web** (`04-web-setup.md` §1 covers the TanStack Start
-dev server):
+**Terminal B — Web** (`04-web-setup.md`, the TanStack Start dev server):
 ```sh
 cd apps/web
 pnpm dev
 ```
-Boots Vite on `:5173`.
+Expected: Vite dev server on `:5173`.
 
-**Terminal C — Daemon** (`05-daemon-setup.md` §8 covers enroll + run).
-Start it after step 4 of the checklist below.
+**Terminal C — Daemon** (`05-daemon-setup.md`): started at check 4, run at
+check 5.
 
-## Checklist
+## The gate
 
-### 1. Health check
+### 2. API health
+
 ```sh
 curl http://localhost:3000/healthz
 ```
-Expected: `{"ok":true}`
+Expected: `{"ok":true}`.
 
-If this fails, the API isn't running. Re-read `03-api-setup.md` §4
-("Sanity check").
+If this fails, the API isn't serving. Re-read `03-api-setup.md` §4.
 
-### 2. Magic link login
-- Open `http://localhost:5173/login` in your browser.
-- Enter the email you signed up to Resend with (the only one sandbox
-  will deliver to — see `03-api-setup.md` §3.3).
-- Submit. You should see "Check your inbox".
-- Open your inbox. Click the link.
-- You should land on `/dashboard` (URL bar shows it). The page renders
-  even though it's empty — that's fine.
-- In browser DevTools → Application → Cookies → `http://localhost:3000`:
-  you should see a `better-auth.session_token` (or similarly named) cookie.
+### 3. Magic-link login
 
-If the cookie doesn't appear, you have a CORS / credentials issue —
-see `04-web-setup.md` pitfalls "auth.getSession() doesn't return
-session even after login" and the better-auth CORS / cookies section
-linked from there.
+- Open `http://localhost:5173/login` in a browser.
+- Enter the email Resend's sandbox will deliver to (`03-api-setup.md` §3).
+- Submit → you see "Check your inbox".
+- Open the email, click the link.
+- Expected: you land on `/dashboard` (the URL bar shows it) and the page
+  renders, even though it's empty.
+- In browser DevTools → Application → Cookies, you should see a
+  `better-auth.session_token` (or similarly named) cookie.
 
-### 3. Create a device
-- Navigate to `/devices` (manually type the URL; nav comes later).
+If no cookie appears, you have a CORS/credentials issue — see
+`04-web-setup.md`'s pitfalls on `auth.getSession()` not returning a session,
+and the better-auth CORS/cookie sections it links.
+
+### 4. Create a Device → Enrollment Token
+
+- Navigate to `/devices` (type the URL; nav comes later).
 - Pick a name (`my-laptop`) and OS (`linux`).
 - Click "Create device".
-- A box appears with a long hex enrollment token. Copy it.
-- The device appears in the list above (initially with `last_seen_at: null`).
+- Expected: a box appears with a long hex Enrollment Token (~30-minute
+  expiry). Copy it. The device does **not** appear in the list yet — the row
+  is created at enroll time (`03-api-setup.md` §6.2).
+- If the device *does* appear immediately with no token flow, the API is
+  still on the old `api_token_hash` design — re-check check 0.
 
-This exercises `03-api-setup.md` §6 (devices route, `POST /devices`)
-end-to-end.
+This exercises `03-api-setup.md` §6 (`POST /devices`) end-to-end.
 
-### 4. Enroll the daemon
+### 5. Enroll the daemon
+
 In Terminal C:
 ```sh
 cd apps/daemon
-go build -o ctrluhr . && ./ctrluhr enroll <token> my-laptop linux
+go build -o ctrluhr . && ./ctrluhr auth enroll <token>
 ```
 Expected output: `Enrolled. Config saved.`
 
-Verify `~/.config/ctrluhr/config.toml` contains `device_jwt = "ey..."`.
+Then verify the key landed owner-only:
+```sh
+cat ~/.config/ctrluhr/config.toml
+```
+Expected: contains `device_jwt = "ey..."` and the device name/OS from the
+web form. If the token was already used or expired you get 401 — re-create
+a Device in the web app and try again (`05-daemon-setup.md`, enroll
+pitfalls).
 
-If you get 401 "invalid or expired token", see `05-daemon-setup.md`
-pitfalls "Enroll returns 401".
+### 6. Run the daemon → events flow
 
-### 5. Run the daemon
+In Terminal C:
 ```sh
 ./ctrluhr dev
 ```
-You should see (after ~2s) actual events being emitted (if you add
-logs via `fmt.Println`) and after ~10s the first batch flush attempt.
+- Within ~2s the stub tracker emits synthetic events.
+- Within ~10s the first batch flush happens: **watch Terminal A's API log**
+  — a `POST /events` request arrives.
 
-Watch the API log in Terminal A — a `POST /events` request should
-arrive with status 200. If 401 — JWT is invalid/expired/mismatched
-(re-check `05-daemon-setup.md` §8 "Common 401"). If 400 — batch
-shape is wrong (check Zod validation response for `details` per
-`03-api-setup.md` §7.4).
+Expected statuses, and what they mean:
+- **200** — ingest OK.
+- **401** — Device Key rejected (re-check enroll + revocation; `05` §8).
+- **400** — batch shape wrong; check the Zod `flatten()` details in the
+  response (`03-api-setup.md` §7).
 
-### 6. Verify the dashboard updates
-Go back to the browser → `/dashboard`. Within 15s you should see:
+### 7. Dashboard reflects events
+
+Back in the browser → `/dashboard`. Within ~30s you should see:
 - The stacked bar in the "current hour" position growing.
-- The "min tracked" total at top-right incrementing.
+- The "min tracked" total incrementing.
 
-If it stays empty: check the API logs for the `/analytics/day` call
-(per `03-api-setup.md` §8.5). If the request returns buckets but the
-chart is blank — check the browser console for errors. ECharts renders
-silently if the container has zero height (per `04-web-setup.md`
-pitfalls "ECharts renders blank") or the data array is all zeros.
+If it stays empty: check Terminal A for the `/analytics/day` call. If the
+request returns buckets but the chart is blank, check the browser console —
+ECharts renders silently when the container has zero height or the data is
+all zeros (`04-web-setup.md`, ECharts pitfalls).
 
-### 7. Verify idempotency
-Stop the daemon with Ctrl-C. Start it again. It will re-emit events
-with random UUIDs — that's expected, they're new events. But the
-dashboard's total should grow by the new set only, not double.
+### 8. Idempotent replay
 
-This is the `onConflictDoNothing` guarantee from
-`03-api-setup.md` §7.1/§7.4 in action. If you want a cleaner
-idempotency test: temporarily make the stub tracker reuse a fixed
-UUID. Confirm the events count doesn't bloat after restart.
+- Stop the daemon (Ctrl-C), start it again.
+- The stub re-emits new events — expected.
+- Expected: the dashboard total grows by the new set only; no duplicates.
+  This is the `onConflictDoNothing` guarantee (`03-api-setup.md` §7).
+- For a cleaner test: temporarily make the stub reuse a fixed event id,
+  restart twice, and confirm the count doesn't bloat at all.
 
-### 8. Verify offline buffering
+### 9. Offline buffering (badger)
+
 - Stop the API (Terminal A).
-- Run the daemon for ~30s (it will fail to flush — check stdout for
-  `uplink: ...` errors).
+- Run the daemon for ~30s — it fails to flush; check stdout for
+  `uplink:` errors. That's fine.
 - Start the API again.
-- Within ~10s the daemon's flusher succeeds; events appear on the
-  dashboard retroactively.
+- Expected: within ~10s the flusher drains; the dashboard shows the events
+  retroactively.
 
-That's badger doing its job (per `05-daemon-setup.md` §4). If events
-are lost when the API is down, your Drain + release logic is buggy —
-re-check `uplink/queue.go` against the reference in §4.2.
+If events are lost while the API was down, your Drain/release logic is
+buggy — re-check `05-daemon-setup.md` §4 against the reference.
 
-### 9. Lint + typecheck the whole repo
+### 10. Revocation kills ingest
+
+- In the web app's `/devices`, revoke `my-laptop` (ADR-0005).
+- Expected: the daemon's **next** `POST /events` gets `401` and it halts
+  (no retry loop). A re-enrolled Device gets a fresh id + key.
+
+This is the per-batch status check (`03-api-setup.md` §5, `05-daemon-setup.md`
+§5). If a Revoked Device keeps ingesting, the device middleware isn't reading
+`devices.status` — the ADR-0005 promise is not yet true.
+
+### 11. Repo gates
+
 ```sh
-cd /home/btz/Code/ctrluhr
-pnpm exec nx run-many -t lint typecheck
+pnpm --filter @ctrluhr/api typecheck
+pnpm --filter @ctrluhr/web typecheck
+cd apps/daemon && go build ./... && go vet ./...
 ```
-Everything green. If Biome complains, fix; don't disable rules. (See
-`01-monorepo-setup.md` §4 for the Biome config.)
-
-### 10. Build everything
+Expected: all green. Then the build:
 ```sh
 pnpm exec nx run-many -t build
 ```
-- `@ctrluhr/schema` — tsc no-op (TS only)
-- `@ctrluhr/api` — bun build artifacts in `apps/api/dist/`
-- `@ctrluhr/web` — `vite build` output in
-  `apps/web/.output/server/index.mjs` (Nitro server bundle)
-- `daemon` — `dist/ctrluhr-linux-amd64` and
-  `dist/ctrluhr-windows-amd64.exe`
+Expected: green except `@ctrluhr/schema` — it has no `tsconfig.json`, so its
+`build`/`typecheck` fail (documented in `01`, adjudication list). **That, and
+the repo-wide `biome check .` lint debt from the 02–04 code, are known
+blockers** — they become the first code-fix tickets of the phase-1 queue.
+The gate counts as passed when the only red is those two documented items,
+each with a ticket.
 
-The Windows cross-compile works because Go is cool like that. You
-won't be able to run the .exe on Linux, but it should compile
-cleanly. If your glibc version or CGO flags cause issues, set
-`CGO_ENABLED=0` in the build command.
-
-## 11. Final commit
+### 12. Final commit + tag
 
 ```sh
 git add -A
 git commit -m "chore: phase 0 smoke test passing"
 git tag phase-0-complete
 ```
-
 Tag it. When phase 3 goes off the rails you'll be grateful for a
 known-good rollback point.
 
 ## What phase 0 does NOT need to do
 
-Don't aim for these in this phase; they belong to later phases
-(per `07-future-phases.md`):
+These belong to later phases (see `07-future-phases.md`):
 - Real window tracking (phase 1)
 - Embedding-based categorization (phase 2)
-- Hourly breakdown in /analytics/day (phase 1)
+- Hourly breakdown in `/analytics/day` (phase 1)
 - Habit features (phase 3)
 - AI suggestions (phase 4)
 - Beautiful UI/polish (any time)
 - Tests beyond the smoke test (when needed)
 
-If you find yourself drifting to one of these, stop and finish
-phase 0 first.
+If you find yourself drifting to one of these, stop and finish phase 0
+first.
 
 ## Phase 0 success = pipeline works end-to-end
 
@@ -185,18 +203,16 @@ The whole point of phase 0 was to de-risk the architecture. You now have:
 - A category-agnostic persistence layer that can grow
 - A queue that survives network hiccups
 - A dashboard that reflects reality in <30s
+- A revocation path that actually cuts ingest
 
-From here, every phase adds features on top of a known-good
-foundation. If phase 1 introduces a bug in the real-tracker, you
-know the rest of the system is fine because phase 0 still works
-(you can revert the daemon and re-run the stub to confirm).
+From here, every phase adds features on top of a known-good foundation. If
+phase 1 introduces a bug in the real tracker, you know the rest of the
+system is fine because phase 0 still works (revert the daemon, re-run the
+stub, confirm).
 
-## Next: read `07-future-phases.md`
+## Next: `07-future-phases.md`
 
-Pick a phase, work through it. When you start a phase, **write a
-build doc for it that follows the docs-as-source-of-truth convention**
-introduced in `docs/README.md` and `00-plan-overview.md` §0. Each
-phase has its own design notes (in `07-future-phases.md`),
-schema changes, and a smoke test at the end. Don't start a phase
-without re-reading the relevant section — they reference the
-current schema and API shape which may have evolved.
+Pick a phase. When you start one, **write its build doc** following the
+convention in `docs/README.md` (ADR-0007) — 8-field steps, fed by a fresh
+`/research` pass over the official docs the phase map points at. Each phase
+has its own entry criteria, constraining ADRs, and exit gate (in `07`).
