@@ -30,7 +30,7 @@ Windows). The dashboard shows your actual day, not fixtures.
 - [ ] Client-side encryption shipped **before any real tracking**: the
       daemon encrypts `app_name`/`window_title` client-side (ADR-0002).
       This is a hard gate — plaintext titles must never hit the server.
-- [ ] Pre-phase-1 migration batch applied: `devices.status` added,
+- [x] Pre-phase-1 migration batch applied: `devices.status` added,
       `api_token_hash` dropped (ADR-0005), `activity_events.productive`
       dropped (ADR-0004), `users.timezone` added (ADR-0003). The schema is
       then the ADR-0007-clean target that `00` §4 documents.

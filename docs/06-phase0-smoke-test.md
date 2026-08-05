@@ -19,12 +19,18 @@ checks (see the Adjudication list), not as `[pending]` markers.
 
 ### 0. Pre-requisite: the enrollment migration is applied
 
-The plan-first parts of `03` §6 need a schema that phase 0's early build
-doesn't have yet: the `enrollment_tokens` table, `devices.status`, the drop
+The plan-first parts of `03` §6 need the schema the pre-phase-1 batch brings:
+the `enrollment_tokens` table, `devices.status`, the drop
 of `devices.api_token_hash` and `activity_events.productive` (ADR-0005,
-ADR-0004). `03` §6's Assumes tell you how to generate + apply that
-migration. **Do not start this test without it** — the device-enroll checks
-below will fail against the old schema.
+ADR-0004). That batch is applied on the main dev DB
+(`20260805220511_pre_phase1_schema_batch`). **Verify it before starting** —
+the device-enroll checks below fail against the old schema:
+
+```sh
+set -a; . apps/api/.env; set +a
+psql "$DB_URL" -tAc "SELECT count(*) FROM information_schema.tables WHERE table_schema='public';"   # → 10
+psql "$DB_URL" -tAc "SELECT column_name FROM information_schema.columns WHERE table_name='enrollment_tokens';"   # → id, user_id, name, os, token, expires_at, created_at
+```
 
 ### 1. Three terminals
 
@@ -222,11 +228,12 @@ This doc is an executable gate, so drift items surface as failing checks
 rather than as `[pending]` markers. One line each, with a recommendation:
 
 1. **Pre-phase-1 schema migration batch not applied** — check 0 fails against
-   the old schema (`api_token_hash`, no `devices.status`). The pending
-   code-fix ticket is the batch: `enrollment_tokens` table, `devices.status`,
+   the old schema (`api_token_hash`, no `devices.status`). The code-fix ticket
+   was the batch: `enrollment_tokens` table, `devices.status`,
    drop `devices.api_token_hash`, drop `activity_events.productive`
-   (ADR-0005, ADR-0004), add `users.timezone` (ADR-0003). `03` §6's Assumes
-   show how to generate + apply it.
+   (ADR-0005, ADR-0004), add `users.timezone` (ADR-0003).
+   *(Resolved — `20260805220511_pre_phase1_schema_batch` applied to the dev
+   DB; check 0 now verifies it rather than creating it.)*
 2. **`@ctrluhr/schema` build/typecheck red** — no `tsconfig.json`, so check
    11's `nx run-many -t build` stays red on schema only (01 adjudication list
    item 1). Recommendation: code-fix ticket; the gate passes when the only

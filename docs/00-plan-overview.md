@@ -170,10 +170,9 @@ users
   email_verified  bool not null default false
   name            text
   image           text
+  timezone        text not null default 'UTC'   -- IANA setting (ADR-0003); web app sets it at first login (DB default 'UTC')
   created_at      timestamptz not null default now()
   updated_at      timestamptz not null default now()
-  -- [pending] timezone text (IANA) — the User-local Day setting of ADR-0003;
-  --           column not yet created; needed before user-local analytics
 
 sessions
   id              text pk
@@ -200,11 +199,19 @@ devices
   user_id         text not null references users(id) on delete cascade
   name            text not null
   os              text not null                  -- 'linux' | 'windows' | 'darwin'
-  api_token_hash  text not null                  -- [pending] dropped (ADR-0005: rotation = revoke + re-enroll)
+  status          text not null default 'active' -- 'active' | 'revoked' (ADR-0005)
   last_seen_at    timestamptz
   created_at      timestamptz not null default now()
-  -- [pending] status text not null default 'active'  -- 'active' | 'revoked' (ADR-0005)
   index (user_id)
+
+enrollment_tokens
+  id              text pk                        -- caller-generated text id (ADR-0006)
+  user_id         text not null references users(id) on delete cascade
+  name            text not null                  -- device name/OS captured at creation (03 §6)
+  os              text not null
+  token           text not null                  -- 64 hex chars, randomBytes(32)
+  expires_at      timestamptz not null           -- 30-minute lifetime
+  created_at      timestamptz not null default now()
 
 categories
   id              text pk
@@ -234,7 +241,6 @@ activity_events
   app_name        text not null                  -- [phase 1] client-encrypted (ADR-0002)
   window_title    text not null                  -- [phase 1] client-encrypted (ADR-0002)
   category_id     text references categories(id) -- nullable: uncategorized, awaiting relabel
-  productive      int                            -- [pending] dropped (ADR-0004: productivity is read live from the category)
   started_at      timestamptz not null
   ended_at        timestamptz not null
   raw_embedding   vector(1536)                   -- cached embedding; server-side role suspended (ADR-0002)
@@ -273,12 +279,12 @@ habit_checkins
 - **Productivity is read live from the category (ADR-0004).** There is no
   per-event snapshot: an event's productivity is always its category's
   current `is_productive`, so reclassifying a category corrects history. The
-  `activity_events.productive` column still physically exists — its drop
-  migration is scheduled before phase 1 — but nothing may read or write it.
-- **Devices are Revoked, not deleted (ADR-0005).** The `status` column and
-  the drop of `api_token_hash` are scheduled before phase 1; until then,
-  don't build UI that deletes a device row — the cascade would silently take
-  its entire event history with it.
+  `activity_events.productive` column was dropped in the pre-phase-1 batch.
+- **Devices are Revoked, not deleted (ADR-0005).** The `devices.status`
+  column is live (`'active' | 'revoked'`) and `api_token_hash` is gone
+  (rotation = revoke + re-enroll). Revoking cuts off ingest while preserving
+  event history; still don't build UI that deletes a device row casually —
+  the cascade would silently take its entire event history with it.
 - **`raw_embedding` / `categories.embedding` keep their columns but have no
   server-side role (ADR-0002).** Client-side encryption gates phase 1, so
   server-side embedding matching cannot work as originally designed;
@@ -289,8 +295,8 @@ habit_checkins
   (`EXTRACT(EPOCH FROM ended_at - started_at)`); a raw-SQL migration can
   re-add it later if range queries need it.
 - **Day boundaries are user-local (ADR-0003).** `habit_checkins.day` and all
-  analytics bucketing use the User's IANA timezone; event storage stays UTC.
-  The `users.timezone` column that setting lives in is not yet created.
+  analytics bucketing use the User's IANA timezone (stored in
+  `users.timezone`, default `'UTC'`); event storage stays UTC.
 
 ## 5. Categorization (superseded design — kept for the record)
 

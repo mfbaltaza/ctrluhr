@@ -2,6 +2,7 @@ export * from './activity-events';
 export * from './categories';
 export * from './category-rules';
 export * from './devices';
+export * from './enrollment-tokens';
 export * from './habit-checkins';
 export * from './habits';
 export * from './sessions';

@@ -10,7 +10,7 @@ export const devices = pgTable(
       .references(() => users.id, { onDelete: 'cascade' }),
     name: text('name').notNull(),
     os: text('os').notNull(), // 'linux' | 'windows' | 'darwin'
-    apiTokenHash: text('api_token_hash').notNull(),
+    status: text('status').notNull().default('active'), // 'active' | 'revoked'
     lastSeenAt: timestamp('last_seen_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   },

@@ -19,9 +19,9 @@ entire event history. Decision:
 
 ## Consequences
 
-- Schema changes before phase 1: add `devices.status`, drop
-  `devices.api_token_hash`; the cascade remains only for the explicit
-  destructive path.
+- Schema changes: `devices.status` added, `devices.api_token_hash` dropped; the
+  cascade remains only for the explicit destructive path. *(Applied —
+  `20260805220511_pre_phase1_schema_batch`.)*
 - Doc corrections when next touched: `03` §5.4 (no longer stateless), `03`
   §6.3 (remove the hash), `00` §3 (claim now accurate).
 - Ingest grows by one indexed read per ~10s batch — negligible.

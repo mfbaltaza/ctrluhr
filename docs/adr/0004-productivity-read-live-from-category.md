@@ -10,8 +10,8 @@ snapshot would permanently preserve the mistake. Two coexisting meanings of
 
 ## Consequences
 
-- `activity_events.productive` is dropped from the schema (one migration
-  before phase 1); `categories.is_productive` is the single source of truth.
+- `activity_events.productive` is dropped from the schema; `categories.is_productive`
+  is the single source of truth. *(Applied — `20260805220511_pre_phase1_schema_batch`.)*
 - Analytics queries join categories for the flag (they already LEFT JOIN for
   the name — no new cost).
 - Uncategorized events have no productivity (NULL category), unchanged.

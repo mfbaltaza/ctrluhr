@@ -373,14 +373,15 @@ export const users = pgTable('users', {
   emailVerified: boolean('email_verified').default(false).notNull(),
   name: text('name'),
   image: text('image'),
+  timezone: text('timezone').notNull().default('UTC'), // IANA setting (ADR-0003)
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 });
 ```
 
-Note: there is **no `timezone` column yet**. ADR-0003 (day boundaries are
-user-local) scheduled `users.timezone` as pending — the canonical schema in
-`00-plan-overview.md` §4 marks it `[pending]`. Don't add it here.
+Note: `timezone` is present on `users` (default `'UTC'`, IANA string). It was
+added in the pre-phase-1 batch per ADR-0003 (day boundaries are user-local) —
+the canonical schema in `00-plan-overview.md` §4 lists it as a real column.
 
 ```ts
 // apps/api/src/schema/sessions.ts
@@ -464,11 +465,10 @@ pnpm --filter @ctrluhr/api typecheck   # exit 0
 
 Three ctrluhr-owned tables.
 
-`devices`: carries `api_token_hash` today — its **drop is pending** (ADR-0005:
-rotation = revoke + re-enroll, so the hash dance is dead), and the `status`
-column ('active'|'revoked') it will need is **not yet created**. Both are
-marked `[pending]` in the canonical schema; don't build UI that deletes a
-Device row meanwhile (the cascade would take its whole event history).
+`devices`: carries `status` (`'active' | 'revoked'`, default `'active'`) and
+no `api_token_hash` — the hash was dropped in the pre-phase-1 batch (ADR-0005:
+rotation = revoke + re-enroll, so the hash dance is dead). Still don't build UI
+that deletes a Device row — the cascade would take its whole event history.
 
 `categories`: this is the first table using pgvector — `vector` imports from
 `drizzle-orm/pg-core` (rc.4 includes it). `embedding` (vector 1536) exists but
@@ -499,13 +499,12 @@ export const devices = pgTable(
       .references(() => users.id, { onDelete: 'cascade' }),
     name: text('name').notNull(),
     os: text('os').notNull(), // 'linux' | 'windows' | 'darwin'
-    apiTokenHash: text('api_token_hash').notNull(), // [pending] dropped (ADR-0005)
+    status: text('status').notNull().default('active'), // 'active' | 'revoked' (ADR-0005)
     lastSeenAt: timestamp('last_seen_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   },
   (t) => [index('devices_user_id_idx').on(t.userId)],
 );
-// [pending] status text not null default 'active' — 'active' | 'revoked' (ADR-0005)
 ```
 
 ```ts
@@ -605,10 +604,10 @@ pnpm --filter @ctrluhr/api typecheck   # exit 0
 
 **Do**
 
-`activity_events`: the workhorse. `productive` **still exists as a column**
-but nothing may read or write it — its drop is pending (ADR-0004), and 00 §4
-marks it `[pending] dropped`. `raw_embedding` (vector 1536) also exists; its
-server-side role is suspended (ADR-0002). There is deliberately **no
+`activity_events`: the workhorse. `productive` was dropped in the pre-phase-1
+batch (ADR-0004 — productivity is read live from the category). `raw_embedding`
+(vector 1536) exists; its server-side role is suspended (ADR-0002). There is
+deliberately **no
 `duration_sec` column**: Drizzle doesn't express generated columns cleanly, so
 duration is computed at query time (`EXTRACT(EPOCH FROM ended_at -
 started_at)`); a raw-SQL migration can re-add it later. No HNSW index on
@@ -642,8 +641,6 @@ export const activityEvents = pgTable(
     appName: text('app_name').notNull(),
     windowTitle: text('window_title').notNull(),
     categoryId: text('category_id').references(() => categories.id),
-    // Snapshot of category.is_productive at event time
-    productive: integer('productive'), // [pending] dropped (ADR-0004: read live from category)
     startedAt: timestamp('started_at', { withTimezone: true }).notNull(),
     endedAt: timestamp('ended_at', { withTimezone: true }).notNull(),
     // Cached embedding of (app || '' || window_title). Server-side role
@@ -816,14 +813,17 @@ misbehaves later. Look for:
 - `CREATE INDEX` / `UNIQUE INDEX` statements at the bottom.
 - The `CREATE EXTENSION IF NOT EXISTS vector;` guard at the top (Step 3).
 
-**The repo's migration history** (this phase is built): two folders exist —
+**The repo's migration history** (this phase is built): three folders exist —
 `20260730230020_initial_schema` (the original full schema, which started life
-with `uuid` ids and a `verifications.token`/`type` pair) and
+with `uuid` ids and a `verifications.token`/`type` pair),
 `20260730232745_faulty_vulture` (the ADR-0006 alignment: every PK/FK
 `uuid → text`, `users.image` added, `verifications` dead columns dropped,
-`identifier`/`value` tightened to NOT NULL). A fresh build from this corrected
+`identifier`/`value` tightened to NOT NULL), and the pre-phase-1 batch
+(`20260805220511_pre_phase1_schema_batch`: adds `enrollment_tokens` and
+`devices.status`, drops `devices.api_token_hash` and `activity_events.productive`,
+adds `users.timezone`). A fresh build from this corrected
 doc writes `text` ids from the start, so `generate` produces a single initial
-migration; the second folder exists only because the schema was built, drifted,
+migration; the later folders exist only because the schema was built, drifted,
 and repaired in production order. Either way the *end state* is the same schema
 above.
 
@@ -831,10 +831,11 @@ above.
 
 ```sh
 ls apps/api/migrations
-# two folders:
+# three folders:
 #   20260730230020_initial_schema
 #   20260730232745_faulty_vulture
-git ls-files apps/api/migrations | wc -l   # → 4 (2 × migration.sql + snapshot.json)
+#   20260805220511_pre_phase1_schema_batch
+git ls-files apps/api/migrations | wc -l   # → 6 (3 × migration.sql + snapshot.json)
 pnpm --filter @ctrluhr/api exec drizzle-kit check   # → "Everything's fine"
 ```
 
@@ -979,14 +980,17 @@ One line per doc↔code disagreement, with a recommendation. These are your call
    created** — ADR-0005 schedules dropping the hash and adding
    `status text NOT NULL DEFAULT 'active'`; both marked `[pending]` in Step 8.
    Recommendation: code-fix ticket in the pre-phase-1 migration batch (which
-   also creates `enrollment_tokens`; see 03 §6).
+   also creates `enrollment_tokens`; see 03 §6). *(Resolved — applied by
+   `20260805220511_pre_phase1_schema_batch`.)*
 2. **`users.timezone` not yet added** — ADR-0003 (User-local Day) schedules it;
    `00` §4 marks it `[pending]` (Step 7). Recommendation: code-fix ticket to
    add `timezone` (default `'UTC'`) in the same pre-phase-1 batch.
+   *(Resolved — applied by the same batch.)*
 3. **`activity_events.productive` (and the suspended embedding columns) still
    exist** — ADR-0004/ADR-0002 suspend them; the drop is `[pending]` (Step 9).
    Recommendation: doc wording only here (nothing reads or writes them); the
-   drops are code-fix tickets before phase 1.
+   drops are code-fix tickets before phase 1. *(Resolved — `productive` dropped
+   by the same batch; the embedding columns stay by ADR-0002.)*
 4. **`DATABASE_URL` vs `DB_URL`** — the repo and this doc standardised on
    `DB_URL`; the older name survives only in ADR-0006-era commits and older
    docs (Step 1). Recommendation: resolved — no code-fix item; any snippet

@@ -801,9 +801,9 @@ query builder and Node's `crypto`.
 
 - §5's Produces: the middlewares compile.
 - **The ADR-0005 schema migration has been applied.** The `devices` table as
-  built in 02 still has `api_token_hash text NOT NULL` and no `status` column.
-  The routes below can't work until it changes (an insert that supplies no
-  `api_token_hash` violates `NOT NULL`). Check:
+  built in 02 now has a `status` column and no `api_token_hash`, and the
+  `enrollment_tokens` table exists (the pre-phase-1 batch
+  `20260805220511_pre_phase1_schema_batch`). Check:
 
   ```sh
   rg -n "apiTokenHash|status" apps/api/src/schema/devices.ts
@@ -811,7 +811,7 @@ query builder and Node's `crypto`.
 
   Expected: `apiTokenHash` absent, `status` present. If not, apply the ADR-0005
   migration first (drop `api_token_hash`, add `devices.status`, and create the
-  `enrollment_tokens` table — see §6.2) — flagged in the adjudication list.
+  `enrollment_tokens` table — see §6.2).
 
 ### Read first
 
@@ -897,6 +897,7 @@ app.get('/', requireUser, async (c) => {
       id: devices.id,
       name: devices.name,
       os: devices.os,
+      status: devices.status,
       last_seen_at: devices.lastSeenAt,
     })
     .from(devices)
@@ -1159,8 +1160,8 @@ interval, so it's a hot read path. Most of the file is one Drizzle query with a
 ### Assumes
 
 §5's Produces (`requireUser`). §7's Produces (there are events to aggregate).
-**The `users.timezone` column exists** — it doesn't yet (ADR-0003 scheduled it;
-see the adjudication list). Check:
+**The `users.timezone` column exists** (added by the pre-phase-1 batch,
+default `'UTC'`, IANA string; ADR-0003). Check:
 
 ```sh
 rg -n "timezone" apps/api/src/schema/users.ts
@@ -1425,8 +1426,9 @@ Run `pnpm install` from the root. If it still fails, the package needs wiring in
 `apps/api/package.json` — that's a code-fix ticket.
 
 ### The §6 enroll insert violates `devices.api_token_hash NOT NULL`
-Expected until the ADR-0005 migration lands (drop the hash, add `status`) — see
-§6's Assumes and the adjudication list. Don't "fix" it by inventing a hash.
+Resolved by the pre-phase-1 batch — the column is gone and the insert no
+longer writes it (ADR-0005). If this error resurfaces on an old database, the
+ADR-0005 migration hasn't been applied there.
 
 ## Done criteria
 
@@ -1466,14 +1468,19 @@ One line per doc↔code disagreement, with a recommendation. These are your call
 4. **Old doc §6 stored enrollment tokens in `verifications`** — the ADR-0006
    migration dropped `verifications.token`/`type`. Recommendation: fix doc —
    dedicated `enrollment_tokens` table (design decision §6.1, confirm shape).
+   *(Resolved — `enrollment_tokens` created by the pre-phase-1 batch.)*
 5. **`devices.api_token_hash` still `NOT NULL`, no `status` column** — scheduled
    for change by ADR-0005 but not applied. Recommendation: code-fix ticket to
    apply the migration (drop hash, add `status`) before §6.
+   *(Resolved — applied by `20260805220511_pre_phase1_schema_batch`.)*
 6. **`users.timezone` missing** — scheduled by ADR-0003, needed by §8.
    Recommendation: code-fix ticket to add the column (default `'UTC'`).
+   *(Resolved — applied by the same batch.)*
 7. **`activity_events.productive` + `raw_embedding` columns still exist** —
    ADR-0004/0002 suspend them; drop scheduled before phase 1. Recommendation:
    doc wording only (this file never reads/writes them); drops stay code-fix tickets.
+   *(Resolved — `productive` dropped by the same batch; `raw_embedding` stays by
+   ADR-0002.)*
 8. **`packages/schema` has no tsconfig.json** — its `typecheck`/`build` scripts
    can't run. Recommendation: code-fix ticket to add one (extends
    `tsconfig.base.json`).

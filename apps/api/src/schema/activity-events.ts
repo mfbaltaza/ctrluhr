@@ -1,4 +1,4 @@
-import { index, integer, pgTable, text, timestamp, vector } from 'drizzle-orm/pg-core';
+import { index, pgTable, text, timestamp, vector } from 'drizzle-orm/pg-core';
 import { categories } from './categories';
 import { devices } from './devices';
 import { users } from './users';
@@ -16,8 +16,6 @@ export const activityEvents = pgTable(
     appName: text('app_name').notNull(),
     windowTitle: text('window_title').notNull(),
     categoryId: text('category_id').references(() => categories.id),
-    // Snapshot of category.is_productive at event time
-    productive: integer('productive'),
     startedAt: timestamp('started_at', { withTimezone: true }).notNull(),
     endedAt: timestamp('ended_at', { withTimezone: true }).notNull(),
     // Cached embedding of (app || '' || window_title). Used for retroactive
