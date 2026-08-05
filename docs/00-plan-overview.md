@@ -1,28 +1,11 @@
 # Plan Overview
 
-This is the reference architecture for ctrluhr. Read it once end-to-end before
-writing any code. Other docs reference sections from here.
-
-## 0. Doc convention
-
-The build docs (01–07) follow a **docs-as-source-of-truth** convention for
-any step that involves a third-party library or framework. Each such step:
-
-- Links to the official docs that matter, in reading order, and calls out
-  the specific sections relevant to our use case.
-- Shows a "Reference — what the end file should look like" code block at
-  the end, marked **REFERENCE ONLY**. Use it to sanity-check what you've
-  written — not as a copy-paste source. Library versions change; docs
-  are always more current than this repo.
-- For our own business logic (enrollment flow, categorization, daemon
-  config) the docs go heavier on code + "why" — there's no external doc
-  to defer to.
-
-See `docs/README.md` §"How these docs are written" for the full rationale.
-**When you start a new phase or pick up a new library, default to this
-convention** — even if the existing doc for that step predates it. Update
-the doc to match the convention as you work, or leave a note for yourself
-to do so.
+This is the reference architecture for ctrluhr, verified against the actual
+code. Read it once end-to-end before writing any code. Other docs reference
+sections from here. It follows the convention in `docs/README.md` (ADR-0007):
+where this doc and the repo disagree about built work, the repo is truth and
+this doc is corrected; changes the ADRs have scheduled but not yet applied
+are annotated **[pending]** with the ADR that decided them.
 
 ## 1. The big picture
 
@@ -42,13 +25,13 @@ Three independently-deployable pieces talk over HTTPS:
 │  ─ batch queue + retry    │  JWT   │  ─ analytics endpoints             │
 │  ─ tray icon, config toml│        │  ─ AI suggestions (phase 4)       │
 └─────────────────────────┘        └──────────────┬───────────────────┘
-                                                  │
-       ┌──────────────────────────┐    ┌──────────▼───────────┐
-       │  TanStack Start web app  │    │ Postgres + pgvector │
-       │  React 19 + ECharts      │ ── │  (Neon, serverless) │
-       │  ─ dashboard, timeline   │    └─────────────────────┘
-       │  ─ habits, devices       │
-       └──────────────────────────┘
+                                                   │
+        ┌──────────────────────────┐    ┌──────────▼───────────┐
+        │  TanStack Start web app  │    │ Postgres + pgvector │
+        │  React 19 + ECharts      │ ── │  (Neon, serverless) │
+        │  ─ dashboard, timeline   │    └─────────────────────┘
+        │  ─ habits, devices       │
+        └──────────────────────────┘
 ```
 
 ## 2. Why this stack (reference card)
@@ -59,7 +42,7 @@ When you forget why we picked something, come back here.
 - Single static binary per OS/arch → trivial install + auto-update.
 - Cross-platform window-tracking libraries exist (`xgb`, user32).
 - Lower memory than Node (always-on process), simpler than Rust (you want to
-  ship, not fight borrow checker for a background process).
+  ship, not fight the borrow checker for a background process).
 - Badger-backed queue means no external state; daemon survives restarts.
 
 ### Hono on Bun, not Next.js or Express
@@ -89,18 +72,18 @@ When you forget why we picked something, come back here.
 ### TanStack Start + React 19, not Next.js
 - You wanted bleeding edge + talent pool. React has it; TanStack Start is the
   most forward-looking React framework (router-first, server functions, full
-  type safety, built on Vite/Vinxi).
+  type safety, built on Vite).
 - TanStack Router gives you type-safe params/search/loaders; TanStack Query
   handles caching against the Hono API.
 - It's pre-1.0 — the trade-off we accept for bleeding edge. If anything
-  blocks you during the build, Fall back to Remix/React Router v7 — same
+  blocks you during the build, fall back to Remix/React Router v7 — same
   philosophy, but more stable. The plan should work identically either way.
 
 ### better-auth with magic link, not Clerk or NextAuth
 - Self-hosted, no per-user pricing, schema fits in your Postgres.
 - Magic link = no passwords to hash, no reset flows, no breaches. Simplest
   secure auth. Resend delivers the email.
-- you can add OAuth later via the same better-auth plugins.
+- You can add OAuth later via the same better-auth plugins.
 
 ### Nx, not just pnpm workspaces or Turborepo
 - Task caching, affected-projects detection, and project graph for free.
@@ -126,7 +109,8 @@ When you forget why we picked something, come back here.
    a. rules match (app_name → category)? assign.
    b. skip embed if raw_embedding cached and title matches; else embed once.
    c. nearest category by cosine sim > threshold? assign. else category_id NULL.
-   (b–c are phase-2+ and move client-side at the encryption gate — ADR-0002.)
+   (b–c are phase-2+ and their server-side form is superseded — ADR-0002.
+   Rules move into the daemon; embedding matching becomes browser-mediated.)
 6. INSERT … ON CONFLICT DO NOTHING (idempotent — daemon can replay safely).
 7. Return { event_id, category_id|null }[] for the daemon's local state.
 ```
@@ -135,7 +119,8 @@ When you forget why we picked something, come back here.
 
 ```
 1. Browser sends TanStack Query request to Hono route /analytics/day?date=…
-2. API runs SQL aggregates (window functions over activity_events).
+2. API runs SQL aggregates over activity_events, day-bucketed in the User's
+   timezone (ADR-0003), productivity read live from categories (ADR-0004).
 3. JSON returned: per-category buckets with durations + uncategorized count.
 4. React renders ECharts stacked bar timeline + heatmap.
 ```
@@ -157,163 +142,183 @@ When you forget why we picked something, come back here.
 2. User runs: ctrluhr auth enroll <token> on the daemon's machine.
 3. Daemon exchanges token for a long-lived JWT ("device API key").
 4. Daemon uses API key in Authorization: Bearer on every /events POST.
-5. User can rotate/revoke in /devices; daemon gets 401 and halts with a tray notification.
+5. API verifies JWT signature AND device status per batch (ADR-0005):
+   a Revoked device's key dies immediately — daemon gets 401 and halts
+   with a tray notification. Rotation = revoke + re-enroll.
 ```
 
 ## 4. Database schema (full reference)
 
-This is the target. Phase 0 creates all of it (including pgvector columns) so
-we never migrate. See `02-database-setup.md` for the step-by-step.
+This is the schema **as built** in `apps/api/src/schema/` (phase 0 creates all
+of it, including pgvector columns, so structural migrations stay rare).
+Annotations mark changes the ADRs have already decided but not yet migrated.
+See `02-database-setup.md` for the step-by-step.
 
-> **Note:** ADR-0002 (client-side encryption) gates phase 1: `window_title`
-> and `app_name` become client-encrypted content columns, and the
-> `raw_embedding` / `categories.embedding` columns lose their server-side
-> role. The encrypted schema shape is designed in the phase-1 build doc.
+> **Ids are `text`, not `uuid`** (ADR-0006): better-auth owns
+> `users`/`sessions`/`verifications` and supplies id values itself, so its
+> tables use `text` primary keys with no server-side default, and every
+> other table follows suit (all PKs and FKs are `text`). The `account`
+> table is deferred until OAuth lands (phase 1+).
 
 ```sql
 CREATE EXTENSION IF NOT EXISTS vector;
 
--- better-auth manages its own tables; we create them via Drizzle schema
--- (user, session, verification). below are ctrluhr-owned tables.
+-- better-auth-owned tables (we hold the Drizzle schema; better-auth reads/writes)
+users
+  id              text pk                    -- better-auth supplies the value (ADR-0006)
+  email           text not null unique
+  email_verified  bool not null default false
+  name            text
+  image           text
+  created_at      timestamptz not null default now()
+  updated_at      timestamptz not null default now()
+  -- [pending] timezone text (IANA) — the User-local Day setting of ADR-0003;
+  --           column not yet created; needed before user-local analytics
 
-users          (id, email, timezone, created_at)  -- better-auth user table + our IANA tz setting (ADR-0003)
-sessions       (id, user_id, expires_at, token)
-verifications  (id, user_id, token, type, expires_at)
+sessions
+  id              text pk
+  user_id         text not null references users(id) on delete cascade
+  token           text not null unique
+  expires_at      timestamptz not null
+  ip_address      text
+  user_agent      text
+  created_at      timestamptz not null default now()
+  updated_at      timestamptz not null default now()
 
+verifications
+  id              text pk
+  identifier      text not null
+  value           text not null
+  user_id         text references users(id) on delete cascade   -- nullable
+  expires_at      timestamptz not null
+  created_at      timestamptz not null default now()
+  updated_at      timestamptz not null default now()
+
+-- ctrluhr-owned tables
 devices
-  id              uuid pk default gen_random_uuid()
-  user_id         uuid not null references users(id) on delete cascade
+  id              text pk
+  user_id         text not null references users(id) on delete cascade
   name            text not null
   os              text not null                  -- 'linux' | 'windows' | 'darwin'
-  status          text not null default 'active' -- 'active' | 'revoked' (ADR-0005)
+  api_token_hash  text not null                  -- [pending] dropped (ADR-0005: rotation = revoke + re-enroll)
   last_seen_at    timestamptz
-  created_at      timestamptz default now()
+  created_at      timestamptz not null default now()
+  -- [pending] status text not null default 'active'  -- 'active' | 'revoked' (ADR-0005)
   index (user_id)
 
 categories
-  id              uuid pk default gen_random_uuid()
-  user_id         uuid not null references users(id) on delete cascade
+  id              text pk
+  user_id         text not null references users(id) on delete cascade
   name            text not null
   color           text not null default '#6b7280'
   is_productive   int  not null default 0        -- -1 distracting | 0 neutral | 1 productive
-  embedding       vector(1536)                   -- category centroid (avg of labeled rows); nullable until first labeled event
-  created_at      timestamptz default now()
+  embedding       vector(1536)                   -- category centroid; server-side role suspended (ADR-0002)
+  created_at      timestamptz not null default now()
   unique (user_id, name)
+  index (user_id)
+  check (is_productive in (-1, 0, 1))
 
 category_rules
-  id            uuid pk default gen_random_uuid()
-  category_id   uuid not null references categories(id) on delete cascade
-  pattern_type  text not null                   -- 'app_name' | 'title_regex'
-  pattern       text not null
+  category_id     text not null references categories(id) on delete cascade
+  pattern_type    text not null                  -- 'app_name' | 'title_regex'
+  pattern         text not null
+  priority        int default 0                  -- ordering room for phase 2
+  primary key (category_id, pattern_type, pattern)  -- same pattern may exist under both matcher types
   index (category_id)
+  check (pattern_type in ('app_name', 'title_regex'))
 
 activity_events
-  id              uuid pk default gen_random_uuid()
-  user_id         uuid not null references users(id) on delete cascade
-  device_id       uuid not null references devices(id) on delete cascade
-  app_name        text not null
-  window_title    text not null                  -- full title per user decision
-  category_id     uuid references categories(id) -- nullable: uncategorized, awaiting relabel
+  id              text pk                        -- generated by the daemon, not the API
+  user_id         text not null references users(id) on delete cascade
+  device_id       text not null references devices(id) on delete cascade
+  app_name        text not null                  -- [phase 1] client-encrypted (ADR-0002)
+  window_title    text not null                  -- [phase 1] client-encrypted (ADR-0002)
+  category_id     text references categories(id) -- nullable: uncategorized, awaiting relabel
+  productive      int                            -- [pending] dropped (ADR-0004: productivity is read live from the category)
   started_at      timestamptz not null
-  ended_at       timestamptz not null
-  raw_embedding   vector(1536)                   -- cached embedding of (app || '' || title); nullable until first embedding
-  -- indexes
-  index (user_id, started_at desc)
+  ended_at        timestamptz not null
+  raw_embedding   vector(1536)                   -- cached embedding; server-side role suspended (ADR-0002)
+  index (user_id, started_at)
   index (user_id, category_id, started_at)
-  -- pgvector hnsw on raw_embedding for similarity queries (phase 2+)
+  -- pgvector hnsw on raw_embedding: re-evaluated when phase 2 is designed (ADR-0002)
 
 habits
-  id                       uuid pk default gen_random_uuid()
-  user_id                  uuid not null references users(id) on delete cascade
+  id                       text pk
+  user_id                  text not null references users(id) on delete cascade
   name                     text not null
   target_minutes_per_day   int not null default 60
   color                    text not null default '#22c55e'
-  linked_category_id       uuid references categories(id) -- can be null for manual-only habits
-  created_at               timestamptz default now()
+  cadence                  text not null default 'daily'   -- as built; only 'daily' is meaningful in phase 0–3
+  linked_category_id       text references categories(id)  -- null for manual-only habits
+  created_at               timestamptz not null default now()
 
 habit_checkins
-  id              uuid pk default gen_random_uuid()
-  habit_id        uuid not null references habits(id) on delete cascade
-  user_id         uuid not null references users(id) on delete cascade
-  day             date not null
+  id              text pk
+  habit_id        text not null references habits(id) on delete cascade
+  user_id         text not null references users(id) on delete cascade
+  day             date not null                  -- a User-local Day (ADR-0003)
   minutes_actual  int not null default 0
   achieved        bool not null default false
-  created_at      timestamptz default now()
+  created_at      timestamptz not null default now()
   unique (habit_id, day)
 ```
 
 ### Design notes worth internalizing
 
-- **`raw_embedding` on activity_events is cached, not derived.** Embed once
-  when the event lands; reuse forever. When you add new categories later,
-  you can re-classify retroactively *without* paying OpenAI again — just
-  re-query the cached embeddings against the new category centroids.
+- **Ids are text and caller-generated (ADR-0006).** better-auth supplies ids
+  for its tables; the daemon generates event ids on emission. There is no
+  `gen_random_uuid()` anywhere — inserts always carry their id.
+- **Idempotent inserts** via `ON CONFLICT (id) DO NOTHING`: daemon batches can
+  be replayed safely on network failure.
 - **Productivity is read live from the category (ADR-0004).** There is no
   per-event snapshot: an event's productivity is always its category's
-  current `is_productive`, so reclassifying a category corrects history.
-  `activity_events.productive` does not exist.
+  current `is_productive`, so reclassifying a category corrects history. The
+  `activity_events.productive` column still physically exists — its drop
+  migration is scheduled before phase 1 — but nothing may read or write it.
+- **Devices are Revoked, not deleted (ADR-0005).** The `status` column and
+  the drop of `api_token_hash` are scheduled before phase 1; until then,
+  don't build UI that deletes a device row — the cascade would silently take
+  its entire event history with it.
+- **`raw_embedding` / `categories.embedding` keep their columns but have no
+  server-side role (ADR-0002).** Client-side encryption gates phase 1, so
+  server-side embedding matching cannot work as originally designed;
+  pgvector's future is re-evaluated when phase 2 is designed. Don't write
+  code that depends on these columns yet.
 - **`duration_sec` was dropped** — Drizzle can't express generated columns
   cleanly (see `02`). Compute duration at query time
   (`EXTRACT(EPOCH FROM ended_at - started_at)`); a raw-SQL migration can
   re-add it later if range queries need it.
-- **Idempotent inserts** via `ON CONFLICT (id) DO NOTHING`: daemon batches can
-  be replayed safely on network failure. The daemon generates the UUID on
-  emission, not the API.
+- **Day boundaries are user-local (ADR-0003).** `habit_checkins.day` and all
+  analytics bucketing use the User's IANA timezone; event storage stays UTC.
+  The `users.timezone` column that setting lives in is not yet created.
 
-## 5. Categorization (phase 2 detail — read now, implement later)
+## 5. Categorization (superseded design — kept for the record)
 
 > **Superseded by ADR-0002.** Server-side embeddings over plaintext titles
 > are no longer the design: rules run in the daemon and embedding matching
-> is browser-mediated. This section is kept for the record; the phase-2
-> build doc will be written from the ADR.
+> is browser-mediated (BYOK by default, proxied as an opt-in). The phase-2
+> build doc will be written from the ADR when phase 2 starts (ADR-0007);
+> `07-future-phases.md` holds the current map.
 
-Two-tier pipeline, rules first then embeddings:
-
-```
-Rules map (category_rules):
-  pattern_type='app_name', pattern='Visual Studio Code' → category "Coding"
-  pattern_type='title_regex', pattern='github\.com' → category "Coding"
-  pattern_type='title_regex', pattern='youtube\.com' → category "Entertainment"
-
-For each new event:
-  1. Try rule match (title regexes first, then app names — first hit wins):
-     - regex_match(window_title, category_rules(pattern_type='title_regex'))
-     - app_name IN category_rules(pattern_type='app_name')
-  2. If no rule matched:
-     - Embed (app + ' ' + title) via text-embedding-3-small.
-     - Cache the embedding in raw_embedding.
-     - Query categories.embedding <-> $1 ORDER BY embedding <=> $1 LIMIT 1 for this user.
-     - If cosine_sim > 0.78, assign category_id and set productive
-       snapshot. Else category_id = NULL (uncategorized queue).
-  3. If raw_embedding was already cached (event already in DB, retroactive run):
-     - Skip embed, reuse. (Phase 2's "relabel" runs.)
-```
-
-### Why threshold 0.78
-
-OpenAI recommendation range is 0.7–0.85. Start at 0.78; tune after seeing your
-own uncategorized count. Below 0.78 = user labels manually (feed the loop),
-which is exactly the habit-construction philosophy.
-
-### Category centroids
-
-`categories.embedding` is periodically recomputed as the average of all
-labeled `raw_embedding` rows for events in that category. A nightly job (phase
-2) or an on-relabel trigger refreshes it. Initially it is NULL → no embedding
-match possible for that category until at least one labeled event exists.
+The original two-tier pipeline was: rules first (title regexes, then app
+names, first hit wins — see `category_rules`), then embedding match against
+category centroids (`text-embedding-3-small`, cosine threshold ~0.78, cached
+in `raw_embedding` so retroactive reclassification never re-pays OpenAI).
+The rule-evaluation order and the Relabel vocabulary in `CONTEXT.md` survive;
+the server-side embedding machinery does not.
 
 ## 6. Phases at a glance
 
 | Phase | Goal | Key deliverable |
 | --- | --- | --- |
 | 0 | Plumbing works end-to-end with synthetic data | Daemon stub → API → Neon → React dashboard shows synthesized activity |
-| 1 | Real tracking | Hyprland/X11 + Windows trackers; full day's actual activity on dashboard |
+| 1 | Real tracking | Hyprland/X11 + Windows trackers; client-side encryption (ADR-0002); full day's actual activity on dashboard |
 | 2 | Categorization | Client-side hybrid pipeline (ADR-0002); relabel UI; uncategorized queue stays small |
 | 3 | Habits | Define habit loops, daily checkins auto-derived from events, streak heatmaps |
 | 4 | AI | Weekly recap, "why am I distracted at 3pm?" grounded answers via Vercel AI SDK |
 | 5 | SaaS hardening | Stripe billing, rate limits, auto-update pipeline, observability |
 
-See `07-future-phases.md` for what each phase entails.
+See `07-future-phases.md` for each phase's entry criteria and constraining decisions.
 
 ## 7. Repo layout target
 
@@ -349,7 +354,7 @@ ctrluhr/
 │   │   ├── src/
 │   │   │   ├── routes/
 │   │   │   │   ├── __root.tsx
-│  │   │   │   ├── login.tsx
+│   │   │   │   ├── login.tsx
 │   │   │   │   └── _auth/
 │   │   │   │       ├── dashboard.tsx
 │   │   │   │       ├── timeline.tsx
@@ -380,12 +385,20 @@ ctrluhr/
     └── .env.example
 ```
 
+**Current state** (so you can enter mid-build): `apps/api` has `index.ts`,
+`auth.ts`, `lib/db.ts`, and `schema/` — `routes/` and the rest of `lib/` land
+in `03`. `apps/web` has the root/login/`_auth` routes with dashboard and
+devices — timeline, categories, habits, settings land later. `apps/daemon` is
+a scaffold (`main.go`, `go.mod`, `project.json`) — its packages land in `05`.
+`infra/` does not exist yet.
+
 ## 8. Naming conventions
 
 - **Project name:** `ctrluhr` everywhere (npm scope if you publish later).
 - **DB table names:** snake_case, plural (matches Drizzle conventions).
-- **TS/JS:** camelCase variables, PascalCase types/components, kebab-case
-  filenames for SvelteRoute files, camelCase for libs.
+- **TS/JS:** camelCase variables, PascalCase types/components; TanStack
+  Router filenames follow its conventions (`__root.tsx`, `_auth` pathless
+  layout directories), kebab-case elsewhere; camelCase for libs.
 - **Go:** exported PascalCase, unexported camelCase, package names lowercase
   single word.
 - **Env vars:** UPPER_SNAKE (`DATABASE_URL`, `RESEND_API_KEY`).
@@ -410,13 +423,14 @@ ctrluhr/
 3. **Browser tab URL depth** — Native OS APIs only give "app + window title"
    (which for a browser contains the page title). To match RescueTime's exact
    URL tracking you'd need browser extensions. 80% as good with just titles.
-4. **Title privacy for multi-tenant SaaS** — You store full titles on your
-   own server. That's fine for self/SaaS-as-trusted-operator. When you add
-   real customers in phase 5, decide: encrypt at rest with user-held keys
-   (upgrade story).
-5. **Embedding cost** — Non-issue. At 1 event/min × 8h × 5d ≈ 2.4k/wk.
-  text-embedding-3-small is $0.02/1M tokens → less than a cent per week.
+4. **Title privacy** — decided, not deferred: client-side encryption gates
+   phase 1 (ADR-0002), driven by open signup (ADR-0001). The server only ever
+   sees ciphertext for content fields once real tracking ships; the Operator
+   reads metadata, never content.
+5. **Embedding cost** — Non-issue if embeddings return in phase 2's
+   browser-mediated form: BYOK spends the User's own key by design
+   (ADR-0002), and volumes are tiny (≈2.4k events/wk at 1/min).
 6. **TanStack Start + TanStack Query confusing** — TanStack Start has its
-   own data loading via route loaders. don't immediately reach for
+   own data loading via route loaders. Don't immediately reach for
    TanStack Query until you understand when each applies (loaders for initial
    route data, Query for mutations and cross-route caching). See 04.
