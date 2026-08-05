@@ -148,12 +148,12 @@ You don't need Fly.io, Vercel, or Stripe accounts until phase 5. Everything runs
 ## Phase you are currently on
 
 Phase 0 — MVP plumbing. Committed: monorepo (01), database schema +
-migrations (02), API bootstrap with better-auth magic link (03 §0–5), web
-auth flow with dashboard + devices routes (04). Next: API routes for
-/devices, /events, /analytics (03 §6–8), then the daemon (05), then the 06
-exit gate. Goal: synthetic event from a stub daemon shows up on your React
-dashboard, behind magic-link auth. Real tracking starts in phase 1 — gated
-on client-side encryption (ADR-0002).
+migrations (02), better-auth config with magic link (03 §0–3), web auth flow
+with dashboard + devices routes (04). Next: Hono bootstrap + auth middlewares
++ routes (03 §4–8), then the daemon (05), then the 06 exit gate. Goal:
+synthetic event from a stub daemon shows up on your React dashboard, behind
+magic-link auth. Real tracking starts in phase 1 — gated on client-side
+encryption (ADR-0002).
 
 ## Goal of phase 0 in one sentence
 
