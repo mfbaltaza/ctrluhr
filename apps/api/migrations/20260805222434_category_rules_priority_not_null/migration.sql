@@ -1,0 +1,1 @@
+ALTER TABLE "category_rules" ALTER COLUMN "priority" SET NOT NULL;

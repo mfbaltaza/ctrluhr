@@ -440,3 +440,4 @@ a scaffold (`main.go`, `go.mod`, `project.json`) — its packages land in `05`.
    own data loading via route loaders. Don't immediately reach for
    TanStack Query until you understand when each applies (loaders for initial
    route data, Query for mutations and cross-route caching). See 04.
+ 

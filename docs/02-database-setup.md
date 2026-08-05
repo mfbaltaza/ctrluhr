@@ -1000,3 +1000,4 @@ One line per doc↔code disagreement, with a recommendation. These are your call
    `DB_URL`; the older name survives only in ADR-0006-era commits and older
    docs (Step 1). Recommendation: resolved — no code-fix item; any snippet
    saying `DATABASE_URL` is stale.
+                                                                                
