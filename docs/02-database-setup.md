@@ -769,13 +769,17 @@ export default defineConfig({
 
 ```sh
 grep -q "DB_URL" apps/api/drizzle.config.ts && grep -q "schema: './src/schema/index.ts'" apps/api/drizzle.config.ts && echo ok
-# schema ↔ migrations are consistent:
-pnpm --filter @ctrluhr/api exec drizzle-kit check
-# → "Everything's fine"
+# schema ↔ migrations are consistent (no drift):
+pnpm --filter @ctrluhr/api exec drizzle-kit generate --explain
+# in sync → prints nothing after the config line; drifted → prints the planned SQL
 ```
 
-(`drizzle-kit check` needs no DB connection — it diffs the schema against the
-committed migration snapshots, which is exactly the drift detector we want.)
+`generate --explain` is the no-DB drift detector: it diffs the schema against
+the last committed snapshot and dry-runs the statements that would be emitted
+(the same ones `generate` writes to a folder). No output = schema and snapshots
+agree. (Don't use `drizzle-kit check` for this — in rc.4 it only validates the
+migration folders' commutativity/conflicts, and it reports "Everything's fine"
+even while the schema and snapshots disagree.)
 
 **Produces**
 
@@ -788,7 +792,8 @@ committed migration snapshots, which is exactly the drift detector we want.)
 **Assumes**
 
 - Step 10: config reads `apps/api/src/schema/index.ts`. Check:
-  `pnpm --filter @ctrluhr/api exec drizzle-kit check && echo ok`
+  `pnpm --filter @ctrluhr/api exec drizzle-kit generate --explain` (prints
+  nothing when schema and snapshots agree — see Step 10)
 
 **Read first**
 
@@ -836,7 +841,7 @@ ls apps/api/migrations
 #   20260730232745_faulty_vulture
 #   20260805220511_pre_phase1_schema_batch
 git ls-files apps/api/migrations | wc -l   # → 6 (3 × migration.sql + snapshot.json)
-pnpm --filter @ctrluhr/api exec drizzle-kit check   # → "Everything's fine"
+pnpm --filter @ctrluhr/api exec drizzle-kit generate --explain   # prints nothing → schema and snapshots agree
 ```
 
 **Produces**
