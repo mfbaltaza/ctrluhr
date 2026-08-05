@@ -12,7 +12,6 @@ export const EventBatchSchema = z.object({
   events: z.array(ActivityEventSchema).max(500),
 });
 
-
 export type ActivityEvent = z.infer<typeof ActivityEventSchema>;
 export type EventBatch = z.infer<typeof EventBatchSchema>;
 

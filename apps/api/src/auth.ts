@@ -12,7 +12,7 @@ export const auth = betterAuth({
   emailAndPassword: { enabled: false },
   plugins: [
     magicLink({
-      sendMagicLink: async ({ email, token, url, metadata }, ctx) => {
+      sendMagicLink: async ({ email, url }, _ctx) => {
         const from = process.env.RESEND_FROM_EMAIL!;
         resend.emails.send({
           from,

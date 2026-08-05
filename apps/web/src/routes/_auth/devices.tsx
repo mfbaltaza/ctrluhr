@@ -74,7 +74,7 @@ function DevicesPage() {
 					<option value="windows">Windows</option>
 					<option value="darwin">macOS</option>
 				</select>
-				<button className="px-4 py-2 rounded bg-emerald-600">
+				<button type="submit" className="px-4 py-2 rounded bg-emerald-600">
 					Create device
 				</button>
 			</form>

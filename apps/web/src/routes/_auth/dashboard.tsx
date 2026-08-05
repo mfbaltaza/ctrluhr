@@ -29,7 +29,8 @@ function DashboardPage() {
 		for (const b of data.buckets) {
 			const hour = new Date().getHours();
 			const minutes = Math.round((b.total_seconds ?? 0) / 60);
-			const point = chartData[hour]!;
+			const point = chartData[hour];
+			if (!point) continue;
 			if (b.productive === 1) point.productive += minutes;
 			else if (b.productive === -1) point.distracting += minutes;
 			else point.neutral += minutes;
