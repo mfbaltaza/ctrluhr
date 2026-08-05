@@ -24,7 +24,7 @@ You will end up with:
 - `pnpm exec biome check` is green for the config files 01 owns
 
 Two known gates are currently **not** fully green and are flagged in the
-adjudication list (see Pitfalls on Steps 3 and 9): `@ctrluhr/schema:build`
+adjudication list (items 1–2; see Pitfalls on Steps 3 and 9): `@ctrluhr/schema:build`
 fails (no `packages/schema/tsconfig.json`), and `pnpm exec biome check .` is
 red repo-wide because of files built by docs 02–04.
 
@@ -321,8 +321,8 @@ ELIFECYCLE  Command failed with exit code 1.
 Cause: `packages/schema` has no `tsconfig.json`, so `tsc` finds no project
 and no input files. The fix is a one-file code fix — add
 `packages/schema/tsconfig.json` extending `../../tsconfig.base.json` — which
-belongs on the adjudication list (code-fix ticket), not in this doc, because
-a fresh builder must land exactly where the repo is. Until then, `nx
+belongs on the adjudication list (item 1, code-fix ticket), not in this doc,
+because a fresh builder must land exactly where the repo is. Until then, `nx
 run-many -t build` and `-t typecheck` stay red on schema only.
 
 ### Verify
@@ -773,9 +773,9 @@ config files:
   `packages/schema/src/event.ts`, `packages/schema/src/index.ts`
 
 This is lint/format debt from later phases, not a 01 regression. It belongs
-on the adjudication list (run `biome check --write .` once 02–04 are rebuilt,
-or file a code-fix ticket). Until then the green gate for this phase is the
-scoped check below, not `biome check .`.
+on the adjudication list (item 2: run `biome check --write .` once 02–04 are
+rebuilt, or file a code-fix ticket). Until then the green gate for this phase
+is the scoped check below, not `biome check .`.
 
 **`@ctrluhr/schema:build` fails** (see Pitfalls on Step 3): `nx run-many -t
 build` is red on schema only; `@ctrluhr/api`, `@ctrluhr/web`, and
@@ -838,3 +838,17 @@ Assumes for `02-database-setup.md`.
 
 `02-database-setup.md` — Neon project, enable pgvector, write the Drizzle
 schema, push the first migration.
+
+## Adjudication list
+
+One line per doc↔code disagreement, with a recommendation. These are your calls:
+
+1. **`packages/schema` has no `tsconfig.json`** — `@ctrluhr/schema:build` and
+   `:typecheck` fail (`tsc --noEmit` with no project; see Pitfalls on Step 3).
+   Recommendation: code-fix ticket to add `packages/schema/tsconfig.json`
+   extending `../../tsconfig.base.json`.
+2. **Repo-wide `pnpm exec biome check .` is red** — 7 errors and 4 warnings,
+   all in files built by docs 02–04 (see Pitfalls on Step 9).
+   Recommendation: code-fix ticket to run `biome check --write .` once 02–04
+   are rebuilt, or reformat the flagged files; this phase's green gate stays
+   the scoped check in Step 9, not `biome check .`.

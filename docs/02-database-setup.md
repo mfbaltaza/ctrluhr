@@ -970,3 +970,24 @@ git log --oneline -1 | head -1
 
 Next file: `03-api-setup.md` — Hono server bootstrap, better-auth magic link
 flow, device enrollment, `/events` ingest route, `/analytics/day` route.
+
+## Adjudication list
+
+One line per doc↔code disagreement, with a recommendation. These are your calls:
+
+1. **`devices.api_token_hash` still in the schema, `devices.status` not yet
+   created** — ADR-0005 schedules dropping the hash and adding
+   `status text NOT NULL DEFAULT 'active'`; both marked `[pending]` in Step 8.
+   Recommendation: code-fix ticket in the pre-phase-1 migration batch (which
+   also creates `enrollment_tokens`; see 03 §6).
+2. **`users.timezone` not yet added** — ADR-0003 (User-local Day) schedules it;
+   `00` §4 marks it `[pending]` (Step 7). Recommendation: code-fix ticket to
+   add `timezone` (default `'UTC'`) in the same pre-phase-1 batch.
+3. **`activity_events.productive` (and the suspended embedding columns) still
+   exist** — ADR-0004/ADR-0002 suspend them; the drop is `[pending]` (Step 9).
+   Recommendation: doc wording only here (nothing reads or writes them); the
+   drops are code-fix tickets before phase 1.
+4. **`DATABASE_URL` vs `DB_URL`** — the repo and this doc standardised on
+   `DB_URL`; the older name survives only in ADR-0006-era commits and older
+   docs (Step 1). Recommendation: resolved — no code-fix item; any snippet
+   saying `DATABASE_URL` is stale.

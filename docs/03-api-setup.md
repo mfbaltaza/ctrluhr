@@ -128,8 +128,8 @@ are deliberate:
   `drizzleAdapter` receives the schema map separately (see §3.4). Don't try to
   re-add the schema argument — it's gone.
 - **`DB_URL`, not `DATABASE_URL`.** The repo standardised on `DB_URL` in
-  `.env.example`, `lib/db.ts`, and `drizzle.config.ts`. (Doc 02 still shows
-  `DATABASE_URL` inline in its examples — see the adjudication list at the end.)
+  `.env.example`, `lib/db.ts`, and `drizzle.config.ts`. Doc 02 was corrected to
+  `DB_URL` in the same pass — see the adjudication list.
 
 #### Reference — what the file is
 
@@ -253,6 +253,16 @@ it through the `better-auth/client` SDK (that's `04-web-setup.md`); the API
 mounts its handler at `/auth/*` (that's §4). Sections 3.1–3.5 are built —
 read them to learn the shape, then check §3.6's Verify to confirm your checkout
 matches.
+
+### Assumes
+
+- §0's Produces: `better-auth`, `@better-auth/drizzle-adapter`, `resend`,
+  `jose`, and `dotenv` are installed in `apps/api`.
+- §1's Produces: `lib/db.ts` exists and the §1 import check passes.
+- §2's Produces: `packages/schema` is wired as an `apps/api` dependency.
+- `02-database-setup.md` produced `apps/api/.env` / `.env.example` (with
+  `DB_URL`, `BETTER_AUTH_SECRET`, `BETTER_AUTH_URL`) and the hand-written
+  `src/schema/{index,users,sessions,verifications}.ts`.
 
 ### 3.1 Read these in order
 
@@ -483,14 +493,16 @@ ADRs, not against code.
 
 1. **Hono — Getting Started** — https://hono.dev/docs/getting-started/basic
    The `new Hono()` → `app.get()` shape and request/response helpers. All of it applies.
-2. **Hono — Concepts: middleware** — https://hono.dev/docs/concepts/middleware
-   "Writing your own middleware" and `c.set`/`c.get` — used heavily in §5.
+2. **Hono — Custom Middleware** — https://hono.dev/docs/guides/middleware
+   "Writing your own middleware" and `c.set`/`c.get` typed `Variables` (`set()`/`get()`
+   also on https://hono.dev/docs/api/context) — used heavily in §5.
 3. **Hono — CORS middleware** — https://hono.dev/docs/middleware/builtin/cors
    Cross-origin cookies: `credentials: true` is what lets the web app on `:5173`
    hold the session cookie set by the API on `:3000`. Without it the browser
    drops the cookie and `getSession` always returns null.
-4. **Hono — Concepts: routers** — https://hono.dev/docs/concepts/routers
-   "Grouping routes" — how `eventsRoute`/`devicesRoute`/`analyticsRoute` mount.
+4. **Hono — the `app.route()` method** — https://hono.dev/docs/api/hono
+   "Grouping routes" — how `eventsRoute`/`devicesRoute`/`analyticsRoute` mount
+   (`concepts/routers` is the internal router engines, not this).
 5. **better-auth — Hono integration** — https://www.better-auth.com/docs/integrations/hono
    The correct way to mount the auth handler — read before writing, see below.
 6. **Bun — HTTP server** — https://bun.sh/docs/runtime/http
@@ -600,7 +612,8 @@ exist yet — that's fine, these are libraries waiting to be consumed.
 
 ### Read first
 
-1. **Hono — typed `Variables` via the generic** — https://hono.dev/docs/concepts/middleware
+1. **Hono — typed `Variables` via the generic** — https://hono.dev/docs/guides/middleware
+   (`set()`/`get()` on https://hono.dev/docs/api/context)
    The `c.set('userId', ...)` / `c.get('userId')` pattern with typed `Variables`
    is what makes the middlewares type-safe end-to-end.
 2. **jose — JWT signing and verification** — https://github.com/panva/jose
@@ -884,9 +897,7 @@ app.get('/', requireUser, async (c) => {
       id: devices.id,
       name: devices.name,
       os: devices.os,
-      status: devices.status,
-      lastSeenAt: devices.lastSeenAt,
-      createdAt: devices.createdAt,
+      last_seen_at: devices.lastSeenAt,
     })
     .from(devices)
     .where(eq(devices.userId, userId));
@@ -968,6 +979,10 @@ to `cookies.txt` (browser devtools), then:
 curl -s -i -X POST http://localhost:3000/devices
 # → HTTP/1.1 401 Unauthorized
 
+# list devices — snake_case, the shape the web app (04 §6.2) reads
+curl -s http://localhost:3000/devices -b cookies.txt
+# → {"devices":[{"id":"<id>","name":"my-laptop","os":"linux","last_seen_at":"..."}]}
+
 # with session → Enrollment Token
 curl -s -X POST http://localhost:3000/devices -b cookies.txt \
   -H 'Content-Type: application/json' -d '{"name":"my-laptop","os":"linux"}'
@@ -1010,9 +1025,11 @@ Key from §6 to call it with.
    `INSERT ... ON CONFLICT (id) DO NOTHING` and is what makes ingestion
    idempotent: the daemon generates ids client-side, so a replayed batch hits
    the same rows and inserts nothing.
-2. **Zod — `safeParse` and `flatten`** — https://zod.dev
+2. **Zod — `safeParse` and `flatten`** — https://zod.dev/error-formatting
    `safeParse` returns `{ success, data, error }` instead of throwing;
    `error.flatten()` produces a structured 400 body the daemon can read.
+   (zod.dev now documents Zod 4; the repo runs Zod 3 — `safeParse`/`flatten()`
+   are identical in both, so this section is unaffected.)
 
 ### Do
 
@@ -1289,6 +1306,8 @@ shifts events across the boundary by design.
 
 ## 9. Run + verify — the smoke flow
 
+### Verify
+
 The built regression plus the plan-first curl flow, in order:
 
 ```sh
@@ -1309,12 +1328,33 @@ curl -s http://localhost:3000/auth/get-session             # {"data":null,"error
 # §8: GET /analytics/day → buckets
 ```
 
+Expected: `bun test-resend.ts` logs a `verifications` row delta (as §3.5), and
+every curl matches its section's Verify — `/healthz` → `{"ok":true}`,
+`/auth/get-session` → `{"data":null,"error":null}` unauthenticated, the §6
+enrollment exchange yields a Device Key, §7 posts receipts then empty on
+replay, §8 returns buckets. A step that 401s or 400s where its section said it
+should succeed means that section isn't done — go back to it, don't paper over
+it here.
+
 A fuller end-to-end gate (sign in → enroll → ingest → dashboard) is
 `06-phase0-smoke-test.md`; the goal to hold in your head from the README: *you
 log in via magic link, create a Device, enroll a daemon with that Device's key,
 and watch synthetic events appear on the dashboard — all wired by you.*
 
+### Produces
+
+The smoke flow verified by hand end-to-end: the `test-resend.ts` regression
+green and every plan-first route from §4–8 answering as its section promises.
+This is the Assumes for `04-web-setup.md` and `06-phase0-smoke-test.md`.
+
 ## 10. Commit `[commit]`
+
+### Assumes
+
+§9's Verify passed — the smoke flow is green and there's nothing uncommitted
+you don't intend to put in these two commits.
+
+### Do
 
 The built API surface (§0–§3) is already committed. Make **two** commits on the
 plan-first work so rollback stays cheap:
@@ -1331,6 +1371,22 @@ git commit -m "feat(db): enrollment tokens, device status, user timezone"
 ```
 
 Small commits make rollbacks painless.
+
+### Verify
+
+```sh
+git status --short            # empty (nothing uncommitted)
+git log --oneline -2
+# feat(db): enrollment tokens, device status, user timezone
+# feat(api): hono bootstrap, auth middlewares, /devices + /events + /analytics
+```
+
+Expected: both commits on top in that order and a clean working tree.
+
+### Produces
+
+The two plan-first commits (`feat(api): …` and `feat(db): …`) — the state
+`04-web-setup.md` and `06-phase0-smoke-test.md` assume.
 
 ## Common pitfalls
 

@@ -31,7 +31,7 @@ snippet and the official docs disagree, the docs win.
 ## Conventions we use
 
 - **Imports use the full module path.** The module is
-  `github.com/btz/ctrluhr/daemon` (`go.mod`, from `01` Step 6), so internal
+  `github.com/btz/ctrluhr/daemon` (`go.mod`, from `01` Step 7), so internal
   imports are `github.com/btz/ctrluhr/daemon/tracker`, never `daemon/tracker`.
   Mixing short and full paths fails the build.
 - **`Tracker` and the queue are the seams.** They stay stable so phase 1 can
@@ -71,11 +71,11 @@ This is the flow the whole doc is built around; it must match `00` §3 and
 
 **Assumes**
 
-- `01-monorepo-setup.md` Step 6 done: `apps/daemon/go.mod` declares
+- `01-monorepo-setup.md` Step 7 done: `apps/daemon/go.mod` declares
   `module github.com/btz/ctrluhr/daemon`, and a stub `apps/daemon/main.go`
-  exists with a `dev` subcommand (produced by `01` Step 6).
+  exists with a `dev` subcommand (produced by `01` Step 7).
 - `apps/daemon/project.json` exists with `build` / `dev` / `test` / `lint` /
-  `typecheck` targets (produced by `01` Step 5).
+  `typecheck` targets (produced by `01` Step 6).
 
 **Do**
 
@@ -95,7 +95,7 @@ go run . dev
 
 Expected: `OK`, then the stub prints `ctrluhr daemon dev mode (stub tracker)`
 and `noop - fill me in during 05-daemon-setup.md`. If the build fails, the
-scaffold drifted — re-read `01` Step 6.
+scaffold drifted — re-read `01` Step 7.
 
 **Produces**
 
@@ -142,7 +142,7 @@ Why each:
   `Unmarshal`, so a TOML library beats hand-rolling.
 - **google/uuid** — client-side event IDs. The daemon generates the UUID;
   the API's `ON CONFLICT (id) DO NOTHING` makes replays idempotent
-  (03 §7.4, ADR-0006). Without a stable client-generated id, a retried
+  (03 §7, ADR-0006). Without a stable client-generated id, a retried
   batch would duplicate rows.
 - **badger/v4** — the embedded queue between restarts (Step 4). Pure Go,
   so it works on every target the daemon builds for.
@@ -335,7 +335,7 @@ Two constraints from the API's schema, and why:
 - **`id` must be a UUID string** (`z.string().uuid()`). The daemon generates
   it with `uuid.NewString()` per event. This is what makes ingestion
   idempotent — the same id on replay hits `ON CONFLICT (id) DO NOTHING`
-  instead of inserting a duplicate (03 §7.4).
+  instead of inserting a duplicate (03 §7).
 - **`started_at` / `ended_at` must end in `Z`.** The API's
   `z.string().datetime()` rejects offset forms. `time.Time` marshals in its
   own location, so an event stamped in your local timezone would be rejected
@@ -352,7 +352,7 @@ import "time"
 
 // Event is one recorded span of focus on this device. The id is generated
 // client-side so the API's ON CONFLICT (id) DO NOTHING makes replays
-// idempotent (03 §7.4). JSON tags match ActivityEventSchema in
+// idempotent (03 §7). JSON tags match ActivityEventSchema in
 // packages/schema/src/event.ts.
 type Event struct {
 	ID          string    `json:"id"`
@@ -577,7 +577,7 @@ Two design points:
   batch and only then calls `release()` to delete the keys. On a failed
   POST the events stay queued and the next drain retries them. Idempotency
   covers the replay: the API's `ON CONFLICT (id) DO NOTHING` means a
-  re-sent batch never double-counts (03 §7.4).
+  re-sent batch never double-counts (03 §7).
 - **`WithLoggingLevel(badger.ERROR)`** silences badger's info chatter; we
   only care about real errors.
 
@@ -726,7 +726,7 @@ Two design points:
   for exactly that reason.
 
 One open question lives here: the API's events route reads the body with
-`c.req.json()` (03 §7.4) and never gunzips manually — it relies on
+`c.req.json()` (03 §7) and never gunzips manually — it relies on
 Bun's server auto-decompressing `Content-Encoding: gzip` request bodies.
 Confirm that at build time (Step 9.1 is the test). If it does not, the
 simplest fix is to drop gzip in phase 0 — the payloads are a handful of
@@ -837,13 +837,13 @@ Expected: exit clean. (Live behavior is Step 9.1: the API log shows a
 **Assumes**
 
 - Step 2.1 done (`config` package with `Save`).
-- `03` §6.4 done: `POST /devices/enroll` exists and returns
+- `03` §6.2 done: `POST /devices/enroll` exists and returns
   `{ device_id, device_key, name, os }` — `device_key` is the Device Key JWT.
 
 **Read first**
 
-- No new third-party library. Read `03` §6.2 (the enrollment flow) and §6.3
-  (`api_token_hash` dropped, ADR-0005) before writing — this step is pure
+- No new third-party library. Read `03` §6.1 (the enrollment flow, and the
+  ADR-0005 `api_token_hash` drop) before writing — this step is pure
   business logic and the flow must match.
 
 **Do**
@@ -853,7 +853,7 @@ top of this file:
 
 1. `POST <endpoint>/devices/enroll` with
    `{ "enrollment_token": "<token>" }` — the API reads the device's name/OS
-   from the token row (created in the web app, `03` §6.4).
+   from the token row (created in the web app, `03` §6.2).
 2. Decode `{ device_id, device_key, name, os }`. `device_key` is the Device
    Key — there is no random-token-plus-hash exchange anymore (ADR-0005); the
    JWT is returned directly.
@@ -862,7 +862,7 @@ top of this file:
    key lands on disk owner-only (Step 2.1).
 
 A 401 on this call means the Enrollment Token was already used (it is
-one-time, `03` §6.4) or expired (30 minutes). The token is created in the
+one-time, `03` §6.1) or expired (30 minutes). The token is created in the
 web app's `/devices` page (`04` §6.2); if it expired, create a new Device
 and copy the fresh token.
 
@@ -900,7 +900,7 @@ func Enroll(endpoint, token string) error {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		// 401 = token already used or expired (03 §6.4): re-create in the
+		// 401 = token already used or expired (03 §6.1): re-create in the
 		// web app's /devices page and try again.
 		return fmt.Errorf("enroll: status %d", resp.StatusCode)
 	}
@@ -1061,7 +1061,7 @@ The tray is the one phase-0 piece with real build friction, so pick one path
 - **Stub (recommended for phase 0).** A `tray` package whose `Run` is a
   no-op. The daemon is headless-capable; nothing in `main` depends on a real
   tray. This keeps the build pure Go, which matters because `project.json`
-  (`01` Step 5) cross-compiles a Windows binary and `06` Step 10 builds
+  (`01` Step 6) cross-compiles a Windows binary and `06` Step 10 builds
   `dist/ctrluhr-windows-amd64.exe` — systray's cgo would drag a mingw
   toolchain into that path, and on Linux it needs GTK/appindicator headers.
 - **Real systray (only if you want the tray now).** The wrapper is small:
@@ -1152,10 +1152,10 @@ dashboard's stacked bar (current-hour bucket) starts growing.
 Red conditions, and what each means (all documented API behavior):
 
 - **`enroll` returns 401** — the Enrollment Token was already used or is
-  past its 30-minute window (`03` §6.4). Create a fresh Device in the web
+  past its 30-minute window (`03` §6.1). Create a fresh Device in the web
   app.
 - **`/events` returns 400** — the batch shape failed Zod. The API returns
-  `details` from `error.flatten()` (`03` §7.4); the usual causes are a
+  `details` from `error.flatten()` (`03` §7); the usual causes are a
   non-UTC timestamp (re-check Step 3.1) or a bad id.
 - **`/events` returns 401** — the Device is revoked or the key doesn't match
   the signing secret (`03` §5.4/§5.5). Check the device's status; re-enroll
@@ -1163,7 +1163,7 @@ Red conditions, and what each means (all documented API behavior):
 - **Events emitted but never flushed** — the gzip/`Content-Encoding`
   question from Step 5.1 is real: confirm Bun auto-decompressed the body.
   If it did not, drop gzip in phase 0 (volumes are tiny) or gunzip in `03`
-  §7.4.
+  §7.
 
 **Produces**
 
@@ -1218,7 +1218,7 @@ per the convention in `docs/README.md` §5.
    §6.2), so the CLI carries no args. The API reads them from the token row
    at `/devices/enroll` and returns them with the Device Key.
 3. **`api_token` response field vs glossary "Device Key".** Resolved in favor
-   of the glossary: the wire field is `device_key` everywhere (`03` §6.4,
+   of the glossary: the wire field is `device_key` everywhere (`03` §6.2,
    this file). `api_token` only survives in `api_token_hash`, the column
    being dropped (ADR-0005).
 4. **Pending queue on revocation.** Events queued for a revoked Device will

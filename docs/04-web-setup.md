@@ -69,6 +69,16 @@ phase 5 (Vercel deploy), not on the phase 0 path.
 
 What makes the app boot and resolve imports the way it does.
 
+### Assumes
+
+1. **01 is done** — `apps/web` exists with the TanStack Start scaffold and the
+   `@ctrluhr/web` package name (01 Step 2a/5), and the three toolchain files
+   this step rewires are present: `package.json`, `vite.config.ts`,
+   `tsr.config.json`.
+2. **The file-level Assumes hold** — 02 (DB) and 03 §0–3 (API bootstrap) are
+   done, and `apps/web` is reachable via `pnpm --filter @ctrluhr/web` from the
+   repo root.
+
 ### 1.1 Read first
 
 1. **TanStack Start — Quick Start** —
@@ -214,6 +224,15 @@ better-auth client and a raw fetch helper. Both hard-code the API origin
 names on the API side (03 §3.3), which is what makes the session cookie work
 cross-origin.
 
+### Assumes
+
+1. **Step 1's Produces** — the toolchain is in place: `vite dev` scripts, the
+   `#/*` imports alias, and a typechecking config, so the two new modules
+   resolve and compile.
+2. **03 §3 is done** — the API's better-auth server exists at
+   `BETTER_AUTH_URL=http://localhost:3000` (03 §3.3), which is the origin
+   Step 2's client and fetch wrapper point at.
+
 ### 2.1 Read first
 
 1. **better-auth — Create Client Instance (React)** —
@@ -262,8 +281,8 @@ A raw fetch wrapper for the non-auth calls (Devices, analytics). It adds
 content type, and throws on non-OK responses. In phase 5 this is replaced by
 a generated Hono RPC client (`hc<...>`) for end-to-end types; for now
 hand-typed keeps every byte of the call explicit. The three endpoints match
-03's documented routes: `GET /devices` and `POST /devices` (03 §6.4), and
-`GET /analytics/day?date=` (03 §8.4).
+03's documented routes: `GET /devices` and `POST /devices` (03 §6.2), and
+`GET /analytics/day?date=` (03 §8).
 
 #### Reference (REFERENCE ONLY)
 
@@ -325,6 +344,15 @@ Three files wire TanStack Router + TanStack Query together:
 `router.tsx` passes the shared `QueryClient` through that context, and
 `query-client.ts` holds the singleton instance (a separate module breaks the
 circular import between `router.tsx` and `__root.tsx`).
+
+### Assumes
+
+1. **Steps 1–2's Produces** — the toolchain and the two API-client modules
+   (`auth-client.ts`, `api.ts`) exist, and the `#/*` alias resolves, so the
+   root route can import `#/lib/query-client`.
+2. **The route-tree file exists** — `src/routeTree.gen.ts` comes from the
+   scaffold (regenerated on dev/build, committed in Step 8); `router.tsx`
+   imports it.
 
 ### 3.1 Read first
 
@@ -503,6 +531,14 @@ A form that calls `signIn.magicLink({ email, callbackURL })`, then swaps to a
 (`:3000/auth/magic-link/verify`); better-auth then redirects the browser to
 `callbackURL` after setting the session cookie.
 
+### Assumes
+
+1. **Step 2's Produces** — `signIn` is exported from `src/lib/auth-client.ts`
+   (the better-auth React client with the magic-link plugin).
+2. **Steps 1–3's Produces** — the toolchain and the query/router plumbing
+   (`QueryClientProvider`, typed root route) are in place, so the route
+   renders and typechecks.
+
 ### 4.1 Read first
 
 1. **better-auth — Magic Link, Sign In (client)** —
@@ -604,6 +640,13 @@ A **pathless layout route** applies the "must be logged in" check once, to
 every route under `_auth/`. The check runs in `beforeLoad`, before the route
 component renders. Separately, the index route `/` redirects to `/dashboard`.
 
+### Assumes
+
+1. **Step 2's Produces** — the full `auth` client (the `createAuthClient`
+   export) provides `auth.getSession()` for `beforeLoad`.
+2. **Step 4's Produces** — `src/routes/login.tsx` exists; the gate redirects
+   there, and `/` needs a target, so `index.tsx` redirects to `/dashboard`.
+
 ### 5.1 Read first
 
 1. **TanStack Router — authenticated routes** —
@@ -696,6 +739,17 @@ A list + create form for Devices (glossary: a machine running one daemon,
 enrolled by a User). Mostly our own UI; the only library surface is TanStack
 Query's `useQuery`/`useMutation`/`useQueryClient` and our `lib/api.ts`.
 
+### Assumes
+
+1. **Steps 1–2's Produces** — `listDevices`/`createDevice` exist in
+   `src/lib/api.ts`, and the toolchain typechecks the new route.
+2. **Step 5's Produces** — the `_auth` gate is in place, so the devices route
+   is protected.
+3. **03 §6.2's shape** — `GET/POST /devices` return `{ devices: [...] }` and
+   `{ enrollment_token, expires_at }`. Those routes are **not built yet**
+   (03 §4–8 is plan-first), so this step's live flow is blocked — verify the
+   web side's state, not the round-trip (see the blocked-integration note).
+
 ### 6.1 Read first
 
 1. **TanStack Query — Queries** —
@@ -718,7 +772,7 @@ Enrollment Token into state (shown in a copyable box) and
 `invalidateQueries({ queryKey: ['devices'] })` so the list refetches. The
 token is one-time and short-lived (~30 minutes — the Enrollment Token
 glossary term), so the box tells the user to run
-`ctrluhr auth enroll <token>` on the daemon machine. The list shape comes from 03 §6.4: `{ devices: [{ id, name,
+`ctrluhr auth enroll <token>` on the daemon machine. The list shape comes from 03 §6.2: `{ devices: [{ id, name,
 os, last_seen_at }] }`.
 
 #### Reference (REFERENCE ONLY)
@@ -849,6 +903,16 @@ ECharts stacked bar (productive / neutral / distracting). The chart wrapper
 uses `echarts.init` directly from a `useEffect` — the `echarts-for-react`
 wrapper is installed but unused.
 
+### Assumes
+
+1. **Step 2's Produces** — `getDay` exists in `src/lib/api.ts` (the
+   `/analytics/day?date=` call), and `echarts` is installed (Step 1).
+2. **Steps 3–5's Produces** — the router plumbing and the `_auth` gate are in
+   place, so `/dashboard` is protected and server-renderable.
+3. **03 §8's shape** — `GET /analytics/day` returns `{ date, buckets }`. Like
+   Step 6, the route is unbuilt (03 §4–8 plan-first), so live data is blocked;
+   the "current hour" dump is the phase-0 placeholder (Step 7.3).
+
 ### 7.1 Read first
 
 1. **ECharts — Import (npm package)** —
@@ -928,7 +992,7 @@ export function DayTimelineChart({ data }: { data: DayTimelinePoint[] }) {
 
 A `useQuery` keyed on `['day', today]` with `refetchInterval: 15_000`, so the
 page refreshes every 15s while a daemon emits. The query result is shaped by
-03 §8.4 — `{ date, buckets: [{ productive: 1 | -1 | 0, total_seconds }] }` —
+03 §8 — `{ date, buckets: [{ productive: 1 | -1 | 0, total_seconds }] }` —
 and is transformed into the chart's 24 zero-buckets: all of a bucket's minutes
 land in the **current hour**, because in phase 0 the API returns day totals,
 not an hourly breakdown. That "current hour" dump is a placeholder — phase 1
@@ -1006,7 +1070,7 @@ function DashboardPage() {
 > The built code uses `new Date().toISOString().slice(0, 10)`, which is UTC
 > (ISO strings are always UTC). For any User off UTC, the "today" bucket is
 > wrong by up to a day's offset. The ADR's fix belongs in a code change (and
-> the API's `analytics/day` date handling, 03 §8.3), not a doc edit — it is
+> the API's `analytics/day` date handling, 03 §8), not a doc edit — it is
 > on the adjudication list for this file.
 
 ### Pitfalls
@@ -1050,6 +1114,16 @@ behind the auth gate.
 (`@tanstack/router-cli`, driven by `tsr.config.json`). It is **committed** so
 a fresh session never waits for first-run generation.
 
+### Assumes
+
+1. **Steps 1–7's Produces** — the route files under `src/routes/`
+   (`__root.tsx`, `login.tsx`, `index.tsx`, `_auth.tsx`,
+   `_auth/devices.tsx`, `_auth/dashboard.tsx`) exist, so `tsr generate` has a
+   real file tree to build.
+2. **The tree is committed** — `src/routeTree.gen.ts` is in git (from the
+   scaffold); this step regenerates and re-commits it, it doesn't create it
+   from scratch.
+
 ### Do
 
 Add a route file under `src/routes/`, then regenerate and commit the tree.
@@ -1082,7 +1156,22 @@ the 31/31-line churn is purely ordering, semantically identical. Don't fight
 it: regenerate deliberately when you add a route, commit the new tree, and
 don't commit half-applied regeneration.
 
+### Produces
+
+`src/routeTree.gen.ts`, regenerated from the current route files and
+committed — the `_auth` pathless layout with `/dashboard` and `/devices`
+hanging off it, plus `/login` and `/`.
+
 ## 9. Run and verify end-to-end
+
+### Assumes
+
+1. **Steps 1–8's Produces** — the toolchain, all routes, the committed route
+   tree, and a passing `pnpm typecheck`/`pnpm build`.
+2. **`pnpm install` from the repo root** — workspace deps are linked before
+   the dev server boots.
+3. **Blocked, be clear:** the end-to-end happy path needs the API (03 §4–8),
+   which is unbuilt — this step verifies the web side only.
 
 ### Do — what works now vs. what is blocked
 
@@ -1129,6 +1218,12 @@ pnpm build
 `typecheck` exits 0; `build` ends with `✓ built` and emits `.output/` (Nitro
 output — gitignored).
 
+### Produces
+
+A booted dev server on `:5173` and a successful `pnpm build` → `.output/` —
+the phase-0 web surface, verifiable for login, redirect, and gate. The live
+login → dashboard flow stays blocked on 03 §4–8.
+
 ### Done criteria
 
 Built and verifiable now:
@@ -1150,6 +1245,11 @@ Blocked on 03 §4–8 (API routes/CORS/port) — re-verify when those land:
 
 ## 10. Commit `[commit]`
 
+### Assumes
+
+1. **Step 9's Verify passed** — `pnpm typecheck`, `pnpm build`, and the curl
+   gates are green; the working tree holds the phase-0 web app.
+
 ```sh
 git add -A
 git commit -m "feat(web): tanstack start app, magic-link auth, dashboard + devices"
@@ -1165,3 +1265,34 @@ git log --oneline --grep="feat(web): tanstack start app" | head -1
 ```
 
 Expected: the commit line for `21975fe`.
+
+### Produces
+
+Commit `21975fe` (`feat(web): tanstack start app, magic-link auth, dashboard
++ devices`) — the phase-0 web app checkpoint.
+
+## Adjudication list
+
+One line per doc↔code disagreement, with a recommendation. These are your calls:
+
+1. **Dashboard "today" is UTC, not user-local (ADR-0003 violation)** — the
+   built `dashboard.tsx` computes today with
+   `new Date().toISOString().slice(0, 10)`, which is always UTC; for any User
+   off UTC the "today" bucket is wrong by up to a day (flagged in Step 7 as a
+   known deviation). Recommendation: code-fix ticket — compute "today" in the
+   User's timezone and align with the API's `analytics/day` date handling
+   (03 §8, which reads `users.timezone`), not a doc edit.
+2. **SSR `getSession` can't see the session cookie — `/dashboard` 500s while
+   the API is down** (Step 5 pitfall). No cookie-forwarding or `/api` proxy
+   exists in phase 0; the client-side `errorComponent` (Step 3) is the
+   fallback. Both are sketched as the proper fixes in
+   `07-future-phases.md`. Recommendation: defer — revisit once 03 §4–8 land.
+3. **Unimported deps never pruned** — `echarts-for-react`, `lucide-react`,
+   `@tanstack/react-query-devtools` (and `@ctrluhr/schema`) are installed but
+   not imported by any web source file (Step 1). Recommendation: code-fix
+   ticket to prune once the chart/devtools setup is settled; the doc already
+   lists them as leave-out-if-rebuilding.
+4. **Login route ignores the `redirect` param** — the auth gate (Step 5)
+   sends `?redirect=<original url>` on the way to `/login`, but `login.tsx`
+   doesn't read it, so after login the user always lands on `/dashboard`.
+   Recommendation: code-fix ticket to read `redirect` in `login.tsx`.

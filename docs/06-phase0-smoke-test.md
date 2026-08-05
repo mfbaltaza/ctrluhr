@@ -9,6 +9,12 @@ This file is a **manual test plan, not a build doc** — there are no new
 libraries to learn. Where a check touches a component explained elsewhere,
 it links to that doc so you can re-read the design if you need context.
 
+Note on form: this gate intentionally follows the executable
+exit-gate/checklist pattern — the prior art named in spec issue #5's Testing
+Decisions — not per-step 8-field blocks, because it is the gate that
+exercises the steps docs 01–05 build. Code-fix items surface as failing
+checks (see the Adjudication list), not as `[pending]` markers.
+
 ## Pre-flight
 
 ### 0. Pre-requisite: the enrollment migration is applied
@@ -209,6 +215,25 @@ From here, every phase adds features on top of a known-good foundation. If
 phase 1 introduces a bug in the real tracker, you know the rest of the
 system is fine because phase 0 still works (revert the daemon, re-run the
 stub, confirm).
+
+## Adjudication list
+
+This doc is an executable gate, so drift items surface as failing checks
+rather than as `[pending]` markers. One line each, with a recommendation:
+
+1. **Pre-phase-1 schema migration batch not applied** — check 0 fails against
+   the old schema (`api_token_hash`, no `devices.status`). The pending
+   code-fix ticket is the batch: `enrollment_tokens` table, `devices.status`,
+   drop `devices.api_token_hash`, drop `activity_events.productive`
+   (ADR-0005, ADR-0004), add `users.timezone` (ADR-0003). `03` §6's Assumes
+   show how to generate + apply it.
+2. **`@ctrluhr/schema` build/typecheck red** — no `tsconfig.json`, so check
+   11's `nx run-many -t build` stays red on schema only (01 adjudication list
+   item 1). Recommendation: code-fix ticket; the gate passes when the only
+   red is this plus the biome lint debt, each with a ticket.
+3. **Repo-wide `biome check .` lint debt** — files built by docs 02–04 (check
+   11). Recommendation: code-fix ticket (`biome check --write .` once 02–04
+   are rebuilt; 01 adjudication list item 2).
 
 ## Next: `07-future-phases.md`
 
