@@ -2,7 +2,7 @@
 
 Run this once you've completed `01`–`05`. It is the end-to-end gate that
 proves the whole pipeline works together. Every item is a runnable check
-with an expected output — nothing here is vibes. If anything fails, don't
+with an expected output — nothing here is guesswork. If anything fails, don't
 move to phase 1; fix it first.
 
 This file is a **manual test plan, not a build doc** — there are no new

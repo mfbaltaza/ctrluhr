@@ -401,7 +401,7 @@ a scaffold (`main.go`, `go.mod`, `project.json`) — its packages land in `05`.
   layout directories), kebab-case elsewhere; camelCase for libs.
 - **Go:** exported PascalCase, unexported camelCase, package names lowercase
   single word.
-- **Env vars:** UPPER_SNAKE (`DATABASE_URL`, `RESEND_API_KEY`).
+- **Env vars:** UPPER_SNAKE (`DB_URL`, `RESEND_API_KEY`).
 
 ## 9. Environments
 

@@ -1398,10 +1398,12 @@ One line per doc↔code disagreement, with a recommendation. These are your call
 
 1. **README says "03 §0–5 committed" but §4–5 aren't built** — `index.ts` is bare
    and `lib/` has only `db.ts`. Recommendation: fix README to "03 §0–3" (the
-   better-auth bootstrap), keep §4–8 as the next work.
+   better-auth bootstrap), keep §4–8 as the next work. *(Resolved — README now
+   says §0–3.)*
 2. **Old doc used `DATABASE_URL`; repo uses `DB_URL`** (db.ts, .env.example,
    drizzle.config.ts). Recommendation: fix doc (this file uses `DB_URL`);
    separately flag 02-database-setup.md, which still shows `DATABASE_URL`.
+   *(Resolved — 02 corrected to `DB_URL` in the same pass.)*
 3. **Old doc §1: `neon-serverless` + `{ schema }` binding** — repo built
    `neon-http` + `drizzle({ client })`. Recommendation: fix doc (done here);
    note drizzle-orm is pinned at `1.0.0-rc.4`.
