@@ -13,6 +13,10 @@ and reviews — not typing.
   speed things up, and keep it minimal.
 - Docs are different: build docs, `CONTEXT.md`, and `docs/adr/` may be
   edited by agents as decisions evolve (the user steers, agents may scribe).
+- When a worktree's branch is merged into `master`, delete the branch (and
+  its remote) and remove the worktree — Orca-managed worktrees via
+  `orca-ide worktree rm --worktree id:<repoId>::<path> --force` (see the
+  `orca-cli` skill).
 
 ## Agent skills
 
